@@ -1,0 +1,13 @@
+# ignore manpage warnings
+resource-agents: no-manual-page usr/sbin/ocft
+resource-agents: no-manual-page usr/sbin/sfex_stat
+resource-agents: groff-message usr/share/man/man7/ocf_heartbeat_openstack-info.7.gz 37: warning [p 1, 2.3i]: can't break line
+
+# these are sourced shell libraries:
+resource-agents: script-not-executable usr/lib/ocf/lib/heartbeat/findif.sh
+resource-agents: script-not-executable usr/lib/ocf/lib/heartbeat/mysql-common.sh
+
+# ignore notices about usr/lib
+resource-agents: executable-in-usr-lib usr/lib/heartbeat/*
+resource-agents: executable-in-usr-lib usr/lib/ocf/resource.d/heartbeat/*
+resource-agents: repeated-path-segment lib usr/lib/ocf/lib/
