@@ -1,0 +1,16 @@
+Description: Use local stylesheet prefix
+Author: Martin Loschwitz <madkiss@debian.org>
+Last-Update: 2011-10-20
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+--- a/doc/man/Makefile.am
++++ b/doc/man/Makefile.am
+@@ -26,7 +26,7 @@
+ 
+ CLEANFILES              = $(man_MANS) $(xmlfiles) metadata-*.xml
+ 
+-STYLESHEET_PREFIX 	?= http://docbook.sourceforge.net/release/xsl/current
++STYLESHEET_PREFIX	?= /usr/share/xml/docbook/stylesheet/docbook-xsl
+ MANPAGES_STYLESHEET 	?= $(STYLESHEET_PREFIX)/manpages/docbook.xsl
+ HTML_STYLESHEET 	?= $(STYLESHEET_PREFIX)/xhtml/docbook.xsl
+ FO_STYLESHEET 		?= $(STYLESHEET_PREFIX)/fo/docbook.xsl

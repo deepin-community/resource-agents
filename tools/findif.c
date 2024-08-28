@@ -292,7 +292,7 @@ SearchUsingRouteCmd (char *address, struct in_addr *in
 			}
 		}
 	}
-	fclose(routefd);
+	pclose(routefd);
 
 	/*
 	 * Check to see if mask isn't available.  It may not be
@@ -669,7 +669,7 @@ main(int argc, char ** argv) {
 		}
 	}
 
-	if (netmaskbits) {
+	if (netmaskbits != NULL && *netmaskbits != EOS) {
 		best_netmask = netmask;
 	}else if (best_netmask == 0L) {
 		/*

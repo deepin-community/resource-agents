@@ -49,6 +49,7 @@ OCF_RESKEY_additional_parameters_default=""
 OCF_RESKEY_replication_user_default="root"
 OCF_RESKEY_replication_passwd_default=""
 OCF_RESKEY_replication_port_default="3306"
+OCF_RESKEY_replication_require_ssl_default="false"
 OCF_RESKEY_replication_master_ssl_ca_default=""
 OCF_RESKEY_replication_master_ssl_cert_default=""
 OCF_RESKEY_replication_master_ssl_key_default=""
@@ -81,6 +82,7 @@ MYSQL_BINDIR=`dirname ${OCF_RESKEY_binary}`
 : ${OCF_RESKEY_replication_user=${OCF_RESKEY_replication_user_default}}
 : ${OCF_RESKEY_replication_passwd=${OCF_RESKEY_replication_passwd_default}}
 : ${OCF_RESKEY_replication_port=${OCF_RESKEY_replication_port_default}}
+: ${OCF_RESKEY_replication_require_ssl=${OCF_RESKEY_replication_require_ssl_default}}
 : ${OCF_RESKEY_replication_master_ssl_ca=${OCF_RESKEY_replication_master_ssl_ca_default}}
 : ${OCF_RESKEY_replication_master_ssl_cert=${OCF_RESKEY_replication_master_ssl_cert_default}}
 : ${OCF_RESKEY_replication_master_ssl_key=${OCF_RESKEY_replication_master_ssl_key_default}}
@@ -94,12 +96,16 @@ MYSQL_BINDIR=`dirname ${OCF_RESKEY_binary}`
 # Convenience variables
 
 MYSQL=$OCF_RESKEY_client_binary
+if ocf_is_true "$OCF_RESKEY_replication_require_ssl"; then
+  MYSQL_OPTIONS_LOCAL_SSL_OPTIONS="--ssl-mode=REQUIRED"
+else
+  MYSQL_OPTIONS_LOCAL_SSL_OPTIONS=""
+fi
 MYSQL_OPTIONS_LOCAL="-S $OCF_RESKEY_socket"
-MYSQL_OPTIONS_REPL="$MYSQL_OPTIONS_LOCAL --user=$OCF_RESKEY_replication_user --password=$OCF_RESKEY_replication_passwd"
+MYSQL_OPTIONS_REPL="$MYSQL_OPTIONS_LOCAL_SSL_OPTIONS $MYSQL_OPTIONS_LOCAL --user=$OCF_RESKEY_replication_user --password=$OCF_RESKEY_replication_passwd"
 MYSQL_OPTIONS_TEST="$MYSQL_OPTIONS_LOCAL --user=$OCF_RESKEY_test_user --password=$OCF_RESKEY_test_passwd"
 MYSQL_TOO_MANY_CONN_ERR=1040
 
-CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot "
 NODENAME=$(ocf_local_nodename)
 CRM_ATTR="${HA_SBIN_DIR}/crm_attribute -N $NODENAME "
 INSTANCE_ATTR_NAME=`echo ${OCF_RESOURCE_INSTANCE}| awk -F : '{print $1}'`
@@ -219,7 +225,7 @@ mysql_common_prepare_dirs()
     # Regardless of whether we just created the directory or it
     # already existed, check whether it is writable by the configured
     # user
-    for dir in $pid_dir $socket_dir; do
+    for dir in $pid_dir $socket_dir $OCF_RESKEY_datadir; do
         if ! $SU -s /bin/sh - $OCF_RESKEY_user -c "test -w $dir"; then
             ocf_exit_reason "Directory $dir is not writable by $OCF_RESKEY_user"
             exit $OCF_ERR_PERM;
@@ -248,7 +254,7 @@ mysql_common_start()
     while [ $start_wait = 1 ]; do
         if ! ps $pid > /dev/null 2>&1; then
             wait $pid
-            ocf_exit_reason "MySQL server failed to start (pid=$pid) (rc=$?), please check your installation"
+            ocf_exit_reason "MySQL server failed to start (pid=$pid) (rc=$?). Check $OCF_RESKEY_log for details"
             return $OCF_ERR_GENERIC
         fi
         mysql_common_status info
@@ -312,6 +318,10 @@ mysql_common_stop()
     if [ $? != $OCF_NOT_RUNNING ]; then
         ocf_log info "MySQL failed to stop after ${shutdown_timeout}s using SIGTERM. Trying SIGKILL..."
         /bin/kill -KILL $pid > /dev/null
+        mysql_common_status info $pid
+        if [ $? != $OCF_NOT_RUNNING ]; then
+            return $OCF_ERR_GENERIC
+        fi
     fi
 
     ocf_log info "MySQL stopped";

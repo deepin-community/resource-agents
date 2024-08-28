@@ -5,6 +5,18 @@
 # by hxinwei@gmail.com
 # License: GNU General Public License v2 (GPLv2) and later
 
+
+# I don't know for certain whether all services actuall _need_ this,
+# I know that at least nfs-server needs it.
+# The rgmanager resource agent in rgmanager/src/resources/nfsserver.sh.in
+# did the unshare for gssd and idmapd as well, even though it seems unclear why.
+# Let's start with just the nfs-server, and add others if/when we have clear
+# indication they need it.
+#NFSD_RELATED_SYSTEMD_SERVICE_FOR_UNSHARE_UTS_NAMESPACE="nfs-idmapd.service nfs-mountd.service nfs-server.service nfsdcld.service rpc-gssd.service rpc-statd.service rpc-statd-notify.service rpcbind.service"
+NFSD_RELATED_SYSTEMD_SERVICE_FOR_UNSHARE_UTS_NAMESPACE="nfs-server.service"
+SYSTEMD_ENVIRONMENT_FILE_NFS_SERVER_SCOPE=/run/sysconfig/nfs-server-scope
+SYSTEMD_UNSHARE_UTS_DROPIN=51-resource-agents-unshare-uts.conf
+
 if [ -n "$OCF_DEBUG_LIBRARY" ]; then
     . $OCF_DEBUG_LIBRARY
 else
@@ -39,7 +51,7 @@ nfsserver_meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="nfsserver">
+<resource-agent name="nfsserver" version="1.0">
 <version>1.0</version>
 
 <longdesc lang="en">
@@ -65,6 +77,16 @@ to use in the event that no init script is detected.
 Init script for nfsserver
 </shortdesc>
 <content type="string" default="auto detected" />
+</parameter>
+
+<parameter name="nfsv4_only" unique="0" required="0">
+<longdesc lang="en">
+Run in NFSv4 only mode (rpc-statd and rpcbind services masked).
+</longdesc>
+<shortdesc lang="en">
+NFSv4 only mode.
+</shortdesc>
+<content type="boolean" default="false" />
 </parameter>
 
 <parameter name="nfs_no_notify" unique="0" required="0">
@@ -97,6 +119,31 @@ causes sm-notify to continue sending notifications to unresponsive peers until i
 Specifies the length of sm-notify retry time (minutes).
 </shortdesc>
 <content type="integer" default="" />
+</parameter>
+
+<parameter name="nfs_server_scope" unique="0" required="0">
+<longdesc lang="en">
+RFC8881, 8.4.2.1 State Reclaim:
+
+If the server scope is different, the client should not attempt to
+reclaim locks. In this situation, no lock reclaim is possible.
+Any attempt to re-obtain the locks with non-reclaim operations is
+problematic since there is no guarantee that the existing
+filehandles will be recognized by the new server, or that if
+recognized, they denote the same objects. It is best to treat the
+locks as having been revoked by the reconfiguration event.
+
+For lock reclaim to even be attempted, we have to define and set the same
+server scope for NFSD on all cluster nodes in the NFS failover cluster.
+
+This agent won't "guess" a suitable server scope name for you, you need to
+explicitly specify this. But without it, NFSv4 lock reclaim after failover
+won't work properly.  Suggested value: the failover "service IP".
+</longdesc>
+<shortdesc lang="en">
+RFC8881 NFS server scope for (lock) state reclaim after failover.
+</shortdesc>
+<content type="string"/>
 </parameter>
 
 <parameter name="nfs_ip" unique="0" required="0">
@@ -269,7 +316,11 @@ nfs_exec()
 	set_exec_mode
 
 	case $EXEC_MODE in 
-		1) ${OCF_RESKEY_nfs_init_script} $cmd;;
+		1) if [ -z "$OCF_RESKEY_nfs_server_scope" ] ; then
+			${OCF_RESKEY_nfs_init_script} $cmd
+		   else
+			unshare -u /bin/sh -c "hostname ${OCF_RESKEY_nfs_server_scope}; exec ${OCF_RESKEY_nfs_init_script} $cmd"
+		   fi ;;
 		2) if ! echo $svc | grep -q "\."; then
 			svc="${svc}.service"
 		   fi
@@ -307,20 +358,22 @@ nfsserver_systemd_monitor()
 	local rc
 	local fn
 
-	ocf_log debug "Status: rpcbind"
-	rpcinfo > /dev/null 2>&1
-	rc=$?
-	if [ "$rc" -ne "0" ]; then
-		ocf_exit_reason "rpcbind is not running"
-		return $OCF_NOT_RUNNING
-	fi
+	if ! ocf_is_true "$OCF_RESKEY_nfsv4_only"; then
+		ocf_log debug "Status: rpcbind"
+		rpcinfo > /dev/null 2>&1
+		rc=$?
+		if [ "$rc" -ne "0" ]; then
+			ocf_exit_reason "rpcbind is not running"
+			return $OCF_NOT_RUNNING
+		fi
 
-	ocf_log debug "Status: nfs-mountd"
-	ps axww | grep -q "[r]pc.mountd"
-	rc=$?
-	if [ "$rc" -ne "0" ]; then
-		ocf_exit_reason "nfs-mountd is not running"
-		return $OCF_NOT_RUNNING
+		ocf_log debug "Status: nfs-mountd"
+		ps axww | grep -q "[r]pc.mountd"
+		rc=$?
+		if [ "$rc" -ne "0" ]; then
+			ocf_exit_reason "nfs-mountd is not running"
+			return $OCF_NOT_RUNNING
+		fi
 	fi
 
 	ocf_log debug "Status: nfs-idmapd"
@@ -334,12 +387,14 @@ nfsserver_systemd_monitor()
 		return $OCF_NOT_RUNNING
 	fi
 
-	ocf_log debug "Status: rpc-statd"
-	rpcinfo -t localhost 100024 > /dev/null 2>&1
-	rc=$?
-	if [ "$rc" -ne "0" ]; then
-		ocf_exit_reason "rpc-statd is not running"
-		return $OCF_NOT_RUNNING
+	if ! ocf_is_true "$OCF_RESKEY_nfsv4_only"; then
+		ocf_log debug "Status: rpc-statd"
+		rpcinfo -t localhost 100024 > /dev/null 2>&1
+		rc=$?
+		if [ "$rc" -ne "0" ]; then
+			ocf_exit_reason "rpc-statd is not running"
+			return $OCF_NOT_RUNNING
+		fi
 	fi
 
 	nfs_exec is-active nfs-server
@@ -383,7 +438,7 @@ nfsserver_monitor ()
 	if [ $rc -eq 0 ]; then
 		# don't report success if nfs servers are up
 		# without locking daemons.
-		v3locking_exec "status"
+		ocf_is_true "$OCF_RESKEY_nfsv4_only" || v3locking_exec "status"
 		rc=$?
 		if [ $rc -ne 0 ]; then
 			ocf_exit_reason "NFS server is up, but the locking daemons are down"
@@ -400,7 +455,7 @@ nfsserver_monitor ()
 prepare_directory ()
 {
 	if [ -z "$fp" ]; then
-		return
+		fp="/var/lib/nfs"
 	fi
 
 	[ -d "$OCF_RESKEY_rpcpipefs_dir" ] || mkdir -p $OCF_RESKEY_rpcpipefs_dir
@@ -465,9 +520,20 @@ unbind_tree ()
 		sleep 1
 		i=$((i + 1))
 	done
-	if is_bound /var/lib/nfs; then
-		umount /var/lib/nfs
+
+	if mount | grep -q " on $OCF_RESKEY_rpcpipefs_dir "; then
+		ocf_log err "Failed to unmount $OCF_RESKEY_rpcpipefs_dir"
+		return $OCF_ERR_GENERIC
 	fi
+
+	if is_bound /var/lib/nfs; then
+		if ! umount /var/lib/nfs; then
+			ocf_log err "Failed to unmount /var/lib/nfs"
+			return $OCF_ERR_GENERIC
+		fi
+	fi
+
+	return $OCF_SUCCESS
 }
 
 binary_status()
@@ -612,6 +678,88 @@ notify_locks()
 	fi
 }
 
+# Problem: https://github.com/ClusterLabs/resource-agents/issues/1644
+# RFC8881, 8.4.2.1 State Reclaim:
+#
+# | If the server scope is different, the client should not attempt to
+# | reclaim locks. In this situation, no lock reclaim is possible.
+# | Any attempt to re-obtain the locks with non-reclaim operations is
+# | problematic since there is no guarantee that the existing
+# | filehandles will be recognized by the new server, or that if
+# | recognized, they denote the same objects. It is best to treat the
+# | locks as having been revoked by the reconfiguration event.
+#
+# That's why for lock reclaim to even be attempted, we have to define and set
+# the same server scope for NFSD on all cluster nodes in the NFS failover
+# cluster. And in linux, that is done by setting the uts nodename for the
+# command that starts the nfsd kernel threads.
+#
+inject_unshare_uts_name_into_systemd_units ()
+{
+	local END_TAG="# END OF DROP-IN FOR NFS SERVER SCOPE"
+	local services
+	services=$(systemctl list-unit-files --no-legend $NFSD_RELATED_SYSTEMD_SERVICE_FOR_UNSHARE_UTS_NAMESPACE | cut -d ' ' -f1)
+
+	local svc dir dropin edited_exec_start do_reload=false
+	local old_umask=$(umask)
+	umask 0022
+	for svc in $services ; do
+		dir=/run/systemd/system/$svc.d
+		dropin=$dir/$SYSTEMD_UNSHARE_UTS_DROPIN
+		grep -sqF "$END_TAG" "$dropin" && continue
+
+		test -d "$dir" || mkdir -p "$dir"
+		test -e "$dropin" && rm -f "$dropin"
+
+		# NOTE: multiple ExecStart may exist,
+		# even additional `ExecStart=` to reset the list might exist in the drop-in files.
+		# We are interested in only the "currently relevant" set of ExecStart.
+		local unshare_uts_set_hostname='/usr/bin/unshare --uts /bin/sh -c '\''hostname ${NFS_SERVER_SCOPE}; exec "$@"'\'' -- '
+		edited_exec_start=$(systemctl cat $svc \
+			| sed -n \
+				-e '/^ExecStart=/ H;'				\
+				-e '/^ExecStart=[[:space:]]*$/ {s/.*//;h};'	\
+				-e '${g;s/^\n//;p}' \
+			| sed -e 's#^\(ExecStart=[-+:!@]*\)\(.\+\)#\1'"$unshare_uts_set_hostname"'\2#'
+		)
+
+		cat > "$dropin" <<___
+[Service]
+EnvironmentFile=$SYSTEMD_ENVIRONMENT_FILE_NFS_SERVER_SCOPE
+# reset list of exec start, then re-populate with unshared uts namespace
+ExecStart=
+$edited_exec_start
+$END_TAG
+___
+		do_reload=true
+		ocf_log debug "injected unshare --uts into $dropin"
+	done
+
+	mkdir -p "${SYSTEMD_ENVIRONMENT_FILE_NFS_SERVER_SCOPE%/*}"
+	echo "NFS_SERVER_SCOPE=$OCF_RESKEY_nfs_server_scope" > "$SYSTEMD_ENVIRONMENT_FILE_NFS_SERVER_SCOPE"
+	umask $old_umask
+
+	$do_reload && systemctl daemon-reload
+}
+
+remove_unshare_uts_dropins ()
+{
+	local services
+	services=$(systemctl list-unit-files --no-legend $NFSD_RELATED_SYSTEMD_SERVICE_FOR_UNSHARE_UTS_NAMESPACE | cut -d ' ' -f1)
+
+	local svc dir dropin do_reload=false
+	for svc in $services ; do
+		dir=/run/systemd/system/$svc.d
+		dropin=$dir/$SYSTEMD_UNSHARE_UTS_DROPIN
+		test -e "$dropin" || continue
+		rm -f "$dropin"
+		do_reload=true
+		ocf_log debug "removed unshare --uts from $svc"
+	done
+	rm -f "${SYSTEMD_ENVIRONMENT_FILE_NFS_SERVER_SCOPE}"
+	$do_reload && systemctl daemon-reload
+}
+
 nfsserver_start ()
 {
 	local rc;
@@ -625,6 +773,20 @@ nfsserver_start ()
 	is_redhat_based && set_env_args
 	bind_tree
 	prepare_directory
+
+	# Debian (and other systems) may provide "init scripts",
+	# which will only redirect back to systemd.
+	# If we just unshare --uts the init script invocation,
+	# the uts namespace is useless in that case.
+	# If systemd is running, mangle the nfs-server.service unit,
+	# independent of the "EXEC_MODE" we detected.
+	if $systemd_is_running ; then
+		if [ -z "$OCF_RESKEY_nfs_server_scope" ] ; then
+			remove_unshare_uts_dropins
+		else
+			inject_unshare_uts_name_into_systemd_units
+		fi
+	fi
 
 	if ! `mount | grep -q " on $OCF_RESKEY_rpcpipefs_dir "`; then
 		mount -t rpc_pipefs sunrpc $OCF_RESKEY_rpcpipefs_dir
@@ -649,48 +811,54 @@ nfsserver_start ()
 
 	# systemd
 	case $EXEC_MODE in
-            [23]) nfs_exec start rpcbind
-		  local i=1
-		  while : ; do
-			ocf_log info "Start: rpcbind i: $i"
-			rpcinfo > /dev/null 2>&1
-			rc=$?
-			if [ "$rc" -eq "0" ]; then
-				break;
-			fi
-			sleep 1
-			i=$((i + 1))
-		  done
+            [23]) if ! ocf_is_true "$OCF_RESKEY_nfsv4_only"; then
+			nfs_exec start rpcbind
+			local i=1
+			while : ; do
+				ocf_log info "Start: rpcbind i: $i"
+				rpcinfo > /dev/null 2>&1
+				rc=$?
+				if [ "$rc" -eq "0" ]; then
+					break
+				fi
+				sleep 1
+				i=$((i + 1))
+			done
+		  fi
 		  ;;
 	esac
 
-	# check to see if we need to start rpc.statd
-	v3locking_exec "status"
-	if [ $? -ne $OCF_SUCCESS ]; then
-		v3locking_exec "start"
-		rc=$?
-		if [ $rc -ne 0 ]; then
-			ocf_exit_reason "Failed to start NFS server locking daemons"
-			return $rc
+	if ! ocf_is_true "$OCF_RESKEY_nfsv4_only"; then
+		# check to see if we need to start rpc.statd
+		v3locking_exec "status"
+		if [ $? -ne $OCF_SUCCESS ]; then
+			v3locking_exec "start"
+			rc=$?
+			if [ $rc -ne 0 ]; then
+				ocf_exit_reason "Failed to start NFS server locking daemons"
+				return $rc
+			fi
+		else
+			ocf_log info "rpc.statd already up"
 		fi
-	else
-		ocf_log info "rpc.statd already up"
 	fi
 
 	# systemd
 	case $EXEC_MODE in
-            [23]) nfs_exec start nfs-mountd
-		  local i=1
-		  while : ; do
-			ocf_log info "Start: nfs-mountd i: $i"
-			ps axww | grep -q "[r]pc.mountd"
-			rc=$?
-			if [ "$rc" -eq "0" ]; then
-				break;
-			fi
-			sleep 1
-			i=$((i + 1))
-		  done
+            [23]) if ! ocf_is_true "$OCF_RESKEY_nfsv4_only"; then
+			nfs_exec start nfs-mountd
+			local i=1
+			while : ; do
+				ocf_log info "Start: nfs-mountd i: $i"
+				ps axww | grep -q "[r]pc.mountd"
+				rc=$?
+				if [ "$rc" -eq "0" ]; then
+					break
+				fi
+				sleep 1
+				i=$((i + 1))
+			done
+		  fi
 
 		  nfs_exec start nfs-idmapd
 		  local i=1
@@ -702,24 +870,26 @@ nfsserver_start ()
 			ocf_log debug "$(cat $fn)"
 			rm -f $fn
 			if [ "$rc" -eq "0" ]; then
-				break;
+				break
 			fi
 			sleep 1
 			i=$((i + 1))
 		  done
 
-		  nfs_exec start rpc-statd
-		  local i=1
-		  while : ; do
-			ocf_log info "Start: rpc-statd i: $i"
-			rpcinfo -t localhost 100024 > /dev/null 2>&1
-			rc=$?
-			if [ "$rc" -eq "0" ]; then
-				break;
-			fi
-			sleep 1
-			i=$((i + 1))
-		  done
+		  if ! ocf_is_true "$OCF_RESKEY_nfsv4_only"; then
+			nfs_exec start rpc-statd
+			local i=1
+			while : ; do
+				ocf_log info "Start: rpc-statd i: $i"
+				rpcinfo -t localhost 100024 > /dev/null 2>&1
+				rc=$?
+				if [ "$rc" -eq "0" ]; then
+					break
+				fi
+				sleep 1
+				i=$((i + 1))
+			done
+		  fi
 	esac
 
 
@@ -777,13 +947,15 @@ nfsserver_stop ()
 			sleep 1
 		  done
 
-		  nfs_exec stop rpc-statd > /dev/null 2>&1
-		  ocf_log info "Stop: rpc-statd"
-		  rpcinfo -t localhost 100024 > /dev/null 2>&1
-		  rc=$?
-		  if [ "$rc" -eq "0" ]; then
-			ocf_exit_reason "Failed to stop rpc-statd"
-			return $OCF_ERR_GENERIC
+		  if ! ocf_is_true "$OCF_RESKEY_nfsv4_only"; then
+			nfs_exec stop rpc-statd > /dev/null 2>&1
+			ocf_log info "Stop: rpc-statd"
+			rpcinfo -t localhost 100024 > /dev/null 2>&1
+			rc=$?
+			if [ "$rc" -eq "0" ]; then
+				ocf_exit_reason "Failed to stop rpc-statd"
+				return $OCF_ERR_GENERIC
+			fi
 		  fi
 
 		  nfs_exec stop nfs-idmapd > /dev/null 2>&1
@@ -798,13 +970,15 @@ nfsserver_stop ()
 			return $OCF_ERR_GENERIC
 		  fi
 
-		  nfs_exec stop nfs-mountd > /dev/null 2>&1
-		  ocf_log info "Stop: nfs-mountd"
-		  ps axww | grep -q "[r]pc.mountd"
-		  rc=$?
-		  if [ "$rc" -eq "0" ]; then
-			ocf_exit_reason "Failed to stop nfs-mountd"
-			return $OCF_ERR_GENERIC
+		  if ! ocf_is_true "$OCF_RESKEY_nfsv4_only"; then
+			nfs_exec stop nfs-mountd > /dev/null 2>&1
+			ocf_log info "Stop: nfs-mountd"
+			ps axww | grep -q "[r]pc.mountd"
+			rc=$?
+			if [ "$rc" -eq "0" ]; then
+				ocf_exit_reason "Failed to stop nfs-mountd"
+				return $OCF_ERR_GENERIC
+			fi
 		  fi
 
 		  if systemctl --no-legend list-unit-files "nfsdcld*" | grep -q nfsdcld; then
@@ -823,10 +997,12 @@ nfsserver_stop ()
 	esac
 
 
-	v3locking_exec "stop"
-	if [ $? -ne 0 ]; then
-		ocf_exit_reason "Failed to stop NFS locking daemons"
-		rc=$OCF_ERR_GENERIC
+	if ! ocf_is_true "$OCF_RESKEY_nfsv4_only"; then
+		v3locking_exec "stop"
+		if [ $? -ne 0 ]; then
+			ocf_exit_reason "Failed to stop NFS locking daemons"
+			rc=$OCF_ERR_GENERIC
+		fi
 	fi
 
 	# systemd
@@ -836,8 +1012,18 @@ nfsserver_stop ()
 	esac
 
 	unbind_tree
-	ocf_log info "NFS server stopped"
-	return 0
+	rc=$?
+	if [ "$rc" -ne $OCF_SUCCESS ]; then
+		ocf_exit_reason "Failed to unmount a bind mount"
+	else
+		ocf_log info "NFS server stopped"
+	fi
+
+	if $systemd_is_running; then
+		remove_unshare_uts_dropins
+	fi
+
+	return $rc
 }
 
 nfsserver_validate ()
@@ -873,6 +1059,7 @@ nfsserver_validate ()
 }
 
 nfsserver_validate
+systemd_is_running && systemd_is_running=true || systemd_is_running=false
 
 case $__OCF_ACTION in
 	start)      nfsserver_start

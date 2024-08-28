@@ -87,7 +87,7 @@ meta_data() {
         cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="WAS6">
+<resource-agent name="WAS6" version="1.0">
 <version>1.0</version>
 
 <longdesc lang="en">
@@ -295,7 +295,7 @@ WAS_report_status() {
 #       This is actually faster than WAS_status above...
 #
 WAS_monitor() {
-  trap '[ -z "$tmpfile" || rmtempfile "$tmpfile"' 0
+  trap '[ -z "$tmpfile" ] || rmtempfile "$tmpfile"' 0
   tmpfile=`maketempfile` || exit 1
   SnoopPort=`GetWASSnoopPort $1`
   output=`$WGET -nv -O$tmpfile  http://localhost:$SnoopPort/snoop 2>&1`

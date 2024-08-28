@@ -50,6 +50,8 @@ OCF_RESKEY_vg_access_mode_default=""
 OCF_RESKEY_activation_mode_default="exclusive"
 OCF_RESKEY_tag_default="pacemaker"
 OCF_RESKEY_partial_activation_default="false"
+OCF_RESKEY_degraded_activation_default="false"
+OCF_RESKEY_majority_pvs_default="false"
 
 : ${OCF_RESKEY_vgname=${OCF_RESKEY_vgname_default}}
 : ${OCF_RESKEY_lvname=${OCF_RESKEY_lvname_default}}
@@ -57,6 +59,8 @@ OCF_RESKEY_partial_activation_default="false"
 : ${OCF_RESKEY_activation_mode=${OCF_RESKEY_activation_mode_default}}
 : ${OCF_RESKEY_tag=${OCF_RESKEY_tag_default}}
 : ${OCF_RESKEY_partial_activation=${OCF_RESKEY_partial_activation_default}}
+: ${OCF_RESKEY_degraded_activation=${OCF_RESKEY_degraded_activation_default}}
+: ${OCF_RESKEY_majority_pvs=${OCF_RESKEY_majority_pvs_default}}
 
 # If LV is given, only activate this named LV; otherwise, activate all
 # LVs in the named VG.
@@ -92,7 +96,7 @@ meta_data() {
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
 
 
-<resource-agent name="LVM-activate">
+<resource-agent name="LVM-activate" version="1.0">
 <version>1.0</version>
 
 <longdesc lang="en">
@@ -114,6 +118,9 @@ clvm+LVM-activate. However, it is not possible to use both at the same time!
 if using the cluster to manage at least one of them.  If you manage some manually,
 the stop action of the lvmlockd agent may fail and the node may get fenced,
 because some DLM lockspaces might be in use and cannot be closed automatically.
+
+3. The autoactivation property of volume group will be disabled when vg_access_mode
+is set to system_id.
 
 Option: OCF_CHECK_LEVEL
 
@@ -186,6 +193,29 @@ logical volumes.
 </longdesc>
 <shortdesc lang="en">Activate VG partially when missing PVs</shortdesc>
 <content type="string" default="${OCF_RESKEY_partial_activation_default}" />
+</parameter>
+
+<parameter name="degraded_activation" unique="0" required="0">
+<longdesc lang="en">
+Activate RAID LVs using the "degraded" activation mode. This allows RAID
+LVs to be activated with missing PVs if all data can be provided with
+RAID redundancy. The RAID level determines the number of PVs that are
+required for degraded activation to succeed. If fewer PVs are available,
+then degraded activation will fail. Also enable majority_pvs.
+</longdesc>
+<shortdesc lang="en">Activate RAID LVs in degraded mode when missing PVs</shortdesc>
+<content type="string" default="${OCF_RESKEY_degraded_activation_default}" />
+</parameter>
+
+<parameter name="majority_pvs" unique="0" required="0">
+<longdesc lang="en">
+If set, the VG system ID can be reassigned to a new host if a majority
+of PVs in the VG are present. Otherwise, VG failover with system ID
+will fail when the VG is missing PVs. Also enable degraded_activation
+when RAID LVs are used.
+</longdesc>
+<shortdesc lang="en">Allow changing the system ID of a VG with a majority of PVs</shortdesc>
+<content type="string" default="${OCF_RESKEY_majority_pvs_default}" />
 </parameter>
 
 </parameters>
@@ -311,7 +341,7 @@ set_tags()
 	esac
 
 	if ! vgchange --addtag $OUR_TAG ${VG} ; then
-		ocf_log err "Failed to add ownership tag to ${VG}"
+		ocf_exit_reason "Failed to add ownership tag to ${VG}"
 		return $OCF_ERR_GENERIC
 	fi
 
@@ -330,8 +360,7 @@ config_verify()
 	real=$(lvmconfig "$name" | cut -d'=' -f2)
 	if [ "$real" != "$expect" ]; then
 		ocf_exit_reason "config item $name: expect=$expect but real=$real"
-		exit $OCF_ERR_CONFIGURED
-
+		exit $OCF_ERR_ARGS
 	fi
 
 	return $OCF_SUCCESS
@@ -363,12 +392,12 @@ lvmlockd_check()
 		fi
 
 		ocf_exit_reason "lvmlockd daemon is not running!"
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_GENERIC
 	fi
 
 	if pgrep clvmd >/dev/null 2>&1 ; then
 		ocf_exit_reason "clvmd daemon is running unexpectedly."
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_GENERIC
 	fi
 
 	return $OCF_SUCCESS
@@ -399,17 +428,17 @@ clvmd_check()
 	# Good: clvmd is running, and lvmlockd is not running
 	if ! pgrep clvmd >/dev/null 2>&1 ; then
 		ocf_exit_reason "clvmd daemon is not running!"
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_GENERIC
 	fi
 
 	if pgrep lvmetad >/dev/null 2>&1 ; then
 		ocf_exit_reason "Please stop lvmetad daemon when clvmd is running."
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_GENERIC
 	fi
 
 	if pgrep lvmlockd >/dev/null 2>&1 ; then
 		ocf_exit_reason "lvmlockd daemon is running unexpectedly."
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_GENERIC
 	fi
 
 	return $OCF_SUCCESS
@@ -419,14 +448,23 @@ systemid_check()
 {
 	# system_id_source is set in lvm.conf
 	source=$(lvmconfig 'global/system_id_source' 2>/dev/null | cut -d"=" -f2)
+
+	# Is volume_list set in lvm.conf
+	vol_list=$(lvmconfig 'activation/volume_list' 2>/dev/null | cut -d"=" -f2)
+
 	if [ "$source" = "" ] || [ "$source" = "none" ]; then
 		ocf_exit_reason "system_id_source in lvm.conf is not set correctly!"
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_ARGS
 	fi
 
 	if [ -z ${SYSTEM_ID} ]; then
 		ocf_exit_reason "local/system_id is not set!"
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_ARGS
+	fi
+
+	if [ -n "$source" ] && [ -n "$vol_list" ]; then
+		ocf_exit_reason "Both system_id_source & volume_list cannot be defined!"
+		exit $OCF_ERR_ARGS
 	fi
 
 	return $OCF_SUCCESS
@@ -438,18 +476,18 @@ tagging_check()
 	# The volume_list must be initialized to something in order to
 	# guarantee our tag will be filtered on startup
 	if ! lvm dumpconfig activation/volume_list; then
-		ocf_log err  "LVM: Improper setup detected"
+		ocf_log err "LVM: Improper setup detected"
 		ocf_exit_reason "The volume_list filter must be initialized in lvm.conf for exclusive activation without clvmd"
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_ARGS
 	fi
 
 	# Our tag must _NOT_ be in the volume_list.  This agent
 	# overrides the volume_list during activation using the
 	# special tag reserved for cluster activation
 	if lvm dumpconfig activation/volume_list | grep -e "\"@${OUR_TAG}\"" -e "\"${VG}\"";  then
-		ocf_log err "LVM:  Improper setup detected"
+		ocf_log err "LVM: Improper setup detected"
 		ocf_exit_reason "The volume_list in lvm.conf must not contain the cluster tag, \"${OUR_TAG}\", or volume group, ${VG}"
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_ARGS
 	fi
 
 	return $OCF_SUCCESS
@@ -460,13 +498,13 @@ read_parameters()
 	if [ -z "$VG" ]
 	then
 		ocf_exit_reason "You must identify the volume group name!"
-		exit $OCF_ERR_ARGS
+		exit $OCF_ERR_CONFIGURED
 	fi
 
 	if [ "$LV_activation_mode" != "shared" ] && [ "$LV_activation_mode" != "exclusive" ]
 	then
 		ocf_exit_reason "Invalid value for activation_mode: $LV_activation_mode"
-		exit $OCF_ERR_ARGS
+		exit $OCF_ERR_CONFIGURED
 	fi
 
 	# Convert VG_access_mode from string to index
@@ -516,28 +554,33 @@ lvm_validate() {
 			exit $OCF_NOT_RUNNING
 		fi
 
+		# Could be a transient error (e.g., iSCSI connection
+		# issue) so use OCF_ERR_GENERIC
 		ocf_exit_reason "Volume group[${VG}] doesn't exist, or not visible on this node!"
-		exit $OCF_ERR_CONFIGURED
+		exit $OCF_ERR_GENERIC
 	fi
 
-	# Inconsistency might be due to missing physical volumes, which doesn't
-	# automatically mean we should fail.  If partial_activation=true then
-	# we should let start try to handle it, or if no PVs are listed as
-	# "unknown device" then another node may have marked a device missing
-	# where we have access to all of them and can start without issue.
-	case $(vgs -o attr --noheadings $VG | tr -d ' ') in
-	???p??*)
-		if ! ocf_is_true "$OCF_RESKEY_partial_activation" ; then
-			# We are missing devices and cannot activate partially
-			ocf_exit_reason "Volume group [$VG] has devices missing.  Consider partial_activation=true to attempt to activate partially"
-			exit $OCF_ERR_GENERIC
+	vg_missing_pv_count=$(vgs -o missing_pv_count --noheadings ${VG} 2>/dev/null)
+
+	if [ $vg_missing_pv_count -gt 0 ]; then
+		ocf_log warn "Volume Group ${VG} is missing $vg_missing_pv_count PVs."
+
+		# Setting new system ID will succeed if over half of PVs remain.
+		# Don't try to calculate here if a majority is present,
+		# but leave this up to the vgchange command to determine.
+		if ocf_is_true "$OCF_RESKEY_majority_pvs" ; then
+			ocf_log warn "Attempting fail over with missing PVs (majority.)"
+
+		# Setting new system ID will fail, and behavior is undefined for
+		# other access modes.
+		elif ocf_is_true "$OCF_RESKEY_partial_activation" ; then
+			ocf_log warn "Attempting fail over with missing PVs (partial.)"
+
 		else
-			# We are missing devices but are allowed to activate partially.
-			# Assume that caused the vgck failure and carry on
-			ocf_log warn "Volume group inconsistency detected with missing device(s) and partial_activation enabled.  Proceeding with requested action."
+			ocf_exit_reason "Volume group [$VG] has devices missing.  Consider majority_pvs=true"
+			exit $OCF_ERR_GENERIC
 		fi
-		;;
-	esac
+	fi
 
 	# Get the access mode from VG metadata and check if it matches the input
 	# value. Skip to check "tagging" mode because there's no reliable way to
@@ -546,7 +589,7 @@ lvm_validate() {
 	mode=$?
 	if [ $VG_access_mode_num -ne 4 ] && [ $mode -ne $VG_access_mode_num ]; then
 		ocf_exit_reason "The specified vg_access_mode doesn't match the lock_type on VG metadata!"
-		exit $OCF_ERR_ARGS
+		exit $OCF_ERR_CONFIGURED
 	fi
 
 	# Nothing to do if the VG has no logical volume
@@ -558,11 +601,11 @@ lvm_validate() {
 
 	# Check if the given $LV is in the $VG
 	if [ -n "$LV" ]; then
-		OUT=$(lvs --foreign --noheadings ${VG}/${LV} 2>&1)
+		output=$(lvs --foreign --noheadings ${VG}/${LV} 2>&1)
 		if [ $? -ne 0 ]; then
-			ocf_log err "lvs: ${OUT}"
+			ocf_log err "lvs: ${output}"
 			ocf_exit_reason "LV ($LV) is not in the given VG ($VG)."
-			exit $OCF_ERR_ARGS
+			exit $OCF_ERR_CONFIGURED
 		fi
 	fi
 
@@ -577,7 +620,6 @@ lvm_validate() {
 	3)
 		systemid_check
 		;;
-
 	4)
 		tagging_check
 		;;
@@ -598,7 +640,18 @@ lvm_validate() {
 do_activate() {
 	do_activate_opt=$1
 
-	if ocf_is_true "$OCF_RESKEY_partial_activation" ; then
+	if ocf_is_true "$OCF_RESKEY_degraded_activation" ; then
+		# This will allow a RAID LV to be activated if sufficient
+		# devices are available to allow the LV to be usable
+		do_activate_opt="${do_activate_opt} --activationmode degraded"
+
+	elif ocf_is_true "$OCF_RESKEY_partial_activation" ; then
+		# This will allow a mirror LV to be activated if any
+		# devices are missing, but the activated LV may not be
+		# usable, so it is not recommended.  Also, other LV
+		# types without data redundancy will be activated
+		# when partial is set.
+		# RAID LVs and degraded_activation should be used instead.
 		do_activate_opt="${do_activate_opt} --partial"
 	fi
 
@@ -629,7 +682,7 @@ lvmlockd_activate() {
 	ocf_run vgchange --lockstart ${VG}
 	rc=$?
 	if [ $rc -ne $OCF_SUCCESS ]; then
-		ocf_log err "Failed to start shared VG(s), exit code: $rc"
+		ocf_exit_reason "Failed to start shared VG(s), exit code: $rc"
 		return $OCF_ERR_GENERIC
 	fi
 
@@ -658,11 +711,25 @@ clvmd_activate() {
 }
 
 systemid_activate() {
+	majority_opt=""
+	set_autoactivation=0
 	cur_systemid=$(vgs --foreign --noheadings -o systemid ${VG} | tr -d '[:blank:]')
 
+	if ocf_is_true "$OCF_RESKEY_majority_pvs" ; then
+		vgchange --help | grep '\--majoritypvs' >/dev/null 2>&1 && majority_opt="--majoritypvs"
+	fi
+
 	# Put our system ID on the VG
-	vgchange -y --config "local/extra_system_ids=[\"${cur_systemid}\"]" \
+	vgchange -y $majority_opt --config "local/extra_system_ids=[\"${cur_systemid}\"]" \
 		--systemid ${SYSTEM_ID} ${VG}
+	vgchange --help | grep '\--setautoactivation' >/dev/null 2>&1 && set_autoactivation=1
+
+	if [ $set_autoactivation -ne 0 ]; then
+		if vgs -o autoactivation ${VG} | grep enabled >/dev/null 2>&1 ; then
+			ocf_log info "disable the autoactivation property of ${VG}"
+			ocf_run vgchange --setautoactivation n ${VG}
+		fi
+	fi
 
 	do_activate "-ay"
 	if [ $? -ne $OCF_SUCCESS ]; then
@@ -674,7 +741,7 @@ systemid_activate() {
 
 tagging_activate() {
 	if ! set_tags ; then
-		ocf_log err "Failed to set tags on ${VG}."
+		ocf_exit_reason "Failed to set tags on ${VG}."
 		return $OCF_ERR_GENERIC
 	fi
 
@@ -699,7 +766,7 @@ lvmlockd_deactivate() {
 	ocf_run vgchange --lockstop ${VG}
 	rc=$?
 	if [ $rc -ne $OCF_SUCCESS ]; then
-		ocf_log err "Failed to close the shared VG lockspace, exit code: $rc"
+		ocf_exit_reason "Failed to close the shared VG lockspace, exit code: $rc"
 		return $OCF_ERR_GENERIC
 	fi
 
@@ -731,7 +798,7 @@ tagging_deactivate() {
 	fi
 
 	if ! strip_tags ; then
-		ocf_log err "Failed to remove tags on ${VG}."
+		ocf_exit_reason "Failed to remove tags on ${VG}."
 		return $OCF_ERR_GENERIC
 	fi
 
@@ -778,7 +845,11 @@ lvm_status() {
 	fi
 
 	if [ $dm_count -eq 0 ]; then
-		return $OCF_NOT_RUNNING
+		if ocf_is_probe ;then
+			return $OCF_NOT_RUNNING
+		else
+			return $OCF_ERR_GENERIC
+		fi
 	fi
 
 	case "$OCF_CHECK_LEVEL" in
@@ -792,10 +863,9 @@ lvm_status() {
 			dd if=${dm_name} of=/dev/null bs=1 count=1 >/dev/null \
 				2>&1
 			if [ $? -ne 0 ]; then
-				return $OCF_NOT_RUNNING
-			else
-				return $OCF_SUCCESS
+				return $OCF_ERR_GENERIC
 			fi
+			return $OCF_SUCCESS
 			;;
 		*)
 			ocf_exit_reason "unsupported monitor level $OCF_CHECK_LEVEL"
@@ -808,17 +878,14 @@ lvm_start() {
         if systemd_is_running ; then
         	# Create drop-in to deactivate VG before stopping
 		# storage services during shutdown/reboot.
-		after=$(systemctl show resource-agents-deps.target.d \
-			--property=After | cut -d'=' -f2)
+		systemctl show resource-agents-deps.target \
+			--property=After | cut -d'=' -f2 | \
+			grep -qE "(^|\s)blk-availability.service(\s|$)"
 
-		case "$after" in
-			*" blk-availability.service "*)
-				;;
-			*)
-				systemd_drop_in "99-LVM-activate" "After" \
+		if [ "$?" -ne 0 ]; then
+			systemd_drop_in "99-LVM-activate" "After" \
 					"blk-availability.service"
-				;;
-		esac
+		fi
 
 		# If blk-availability isn't started, the "After="
 		# directive has no effect.
@@ -889,7 +956,7 @@ lvm_stop() {
 		tagging_deactivate
 		;;
 	*)
-		ocf_log err "VG [${VG}] is not properly configured in cluster. It's unsafe!"
+		ocf_exit_reason "VG [${VG}] is not properly configured in cluster. It's unsafe!"
 		exit $OCF_SUCCESS
 		;;
 	esac

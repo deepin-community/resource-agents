@@ -1,0 +1,8 @@
+01_docbook_patch.patch
+mysql-path.patch
+no-dirty-version
+ipv6-linux-only
+ocft-configs.patch
+gitignore.patch
+reproducible.patch
+var-run.patch
