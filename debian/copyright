@@ -41,6 +41,7 @@ License: GPL
 
 Files: debian/*
 Copyright: 2011 Andres Rodriguez <andreserl@ubuntu.com>
+           2022 Valentin Vidic <vvidic@debian.org>
 License: GPL-2+
 
 Files: doc/dev-guides/*

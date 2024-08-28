@@ -1,3 +1,99 @@
+resource-agents (1:4.15.1-1) unstable; urgency=medium
+
+  * New upstream version 4.15.1
+  * debian/patches: refresh for new version
+  * debian/control: update Build-Depends for new version
+  * debian/lintian-overrides: refresh for new version
+
+ -- Valentin Vidic <vvidic@debian.org>  Sun, 28 Jul 2024 18:25:52 +0200
+
+resource-agents (1:4.14.0-1) unstable; urgency=medium
+
+  * New upstream version 4.14.0
+  * debian/patches: refresh for new version
+  * debian/control: update Standards-Version to 4.7.0
+  * debian/control: update Build-Depends for systemd-dev (Closes: #1060518,
+    #1071980)
+  * debian/control: drop legacy depends on syslog for ldirectord (Closes:
+    #1072026)
+  * debian/tests: install exim4 for MailTo test (Closes: #1060759)
+  * debian/control: update Build-Depends for pkgconf
+
+ -- Valentin Vidic <vvidic@debian.org>  Wed, 05 Jun 2024 21:18:06 +0200
+
+resource-agents (1:4.13.0-1) unstable; urgency=medium
+
+  [ Valentin Vidic ]
+  * New upstream version 4.13.0
+  * debian/control: update Build-Depends for new version
+  * debian/patches: refresh for new version
+  * debian/lintian-overrides: update for new version
+
+  [ Helmut Grohne ]
+  * Fix FTBFS when systemd.pc changes systemdsystemunitdir. (Closes: #1052699)
+
+ -- Valentin Vidic <vvidic@debian.org>  Thu, 02 Nov 2023 22:13:55 +0100
+
+resource-agents (1:4.12.0-2) unstable; urgency=medium
+
+  * debian/patches: add IPv6addr-delay.patch (Closes: #1034280)
+  * debian/patches: refresh patches offsets
+
+ -- Valentin Vidic <vvidic@debian.org>  Thu, 13 Apr 2023 21:43:52 +0200
+
+resource-agents (1:4.12.0-1) unstable; urgency=medium
+
+  * New upstream version 4.12.0
+  * debian/control: drop lsb-base dependency
+  * debian/patches: refresh for new version
+
+ -- Valentin Vidic <vvidic@debian.org>  Thu, 26 Jan 2023 00:44:32 +0100
+
+resource-agents (1:4.11.0-3) unstable; urgency=medium
+
+  * debian/patches: fix build failure in shellcheck of WAS6
+  * debian/control: update Standards-Version to 4.6.2
+
+ -- Valentin Vidic <vvidic@debian.org>  Mon, 26 Dec 2022 13:20:51 +0100
+
+resource-agents (1:4.11.0-2) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Remove constraints unnecessary since buster
+
+  [ Valentin Vidic ]
+  * debian/watch: update github url
+  * debian/control: update Standards-Version to 4.6.1
+  * debian/lintian-overrides: refresh for new lintian version
+
+ -- Valentin Vidic <vvidic@debian.org>  Sun, 13 Nov 2022 13:58:03 +0100
+
+resource-agents (1:4.11.0-1) unstable; urgency=medium
+
+  * New upstream version 4.11.0
+  * debian/patches: refresh for new version
+  * debian/copyright: update copyright for debian directory
+
+ -- Valentin Vidic <vvidic@debian.org>  Wed, 06 Apr 2022 22:08:42 +0200
+
+resource-agents (1:4.10.0-1) unstable; urgency=medium
+
+  * New upstream version 4.10.0
+  * debian/watch: update github url
+  * debian/control: update Standards-Version to 4.6.0
+  * debian/control: update build dependencies
+  * debian/control: add bc to Depends (Closes: #1000644)
+  * debian/patches: refresh for new version
+  * debian/lintian-overrides: refresh for new version
+  * debian/patches: fix shellcheck errors
+  * debian/rules: fix version used for building
+  * debian/rules: fix manpage header
+  * debian/control: remove old Conflicts and Replaces
+  * debian/lintian-overrides: ignore capitalization in agent names
+  * debian/rules: move internal binaries to /usr/libexec/heartbeat
+
+ -- Valentin Vidic <vvidic@debian.org>  Sun, 03 Apr 2022 13:39:33 +0200
+
 resource-agents (1:4.7.0-1) unstable; urgency=medium
 
   * New upstream version 4.7.0

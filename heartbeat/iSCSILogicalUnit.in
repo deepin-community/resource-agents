@@ -43,6 +43,8 @@ elif have_binary lio_node; then
 	OCF_RESKEY_implementation_default="lio"
 elif have_binary targetcli; then
 	OCF_RESKEY_implementation_default="lio-t"
+elif have_binary scstadmin; then
+	OCF_RESKEY_implementation_default="scst"
 fi
 : ${OCF_RESKEY_implementation=${OCF_RESKEY_implementation_default}}
 
@@ -91,8 +93,8 @@ meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="iSCSILogicalUnit">
-<version>0.9</version>
+<resource-agent name="iSCSILogicalUnit" version="0.9">
+<version>1.0</version>
 
 <longdesc lang="en">
 Manages iSCSI Logical Unit. An iSCSI Logical unit is a subdivision of
@@ -104,9 +106,9 @@ an SCSI Target, exported via a daemon that speaks the iSCSI protocol.
 <parameter name="implementation" required="0" unique="0">
 <longdesc lang="en">
 The iSCSI target daemon implementation. Must be one of "iet", "tgt",
-"lio", or "lio-t".  If unspecified, an implementation is selected based on the
+"lio", "lio-t", or "scst".  If unspecified, an implementation is selected based on the
 availability of management utilities, with "iet" being tried first,
-then "tgt", then "lio", then "lio-t".
+then "tgt", then "lio", then "lio-t", then "scst".
 </longdesc>
 <shortdesc lang="en">iSCSI target daemon implementation</shortdesc>
 <content type="string" default="${OCF_RESKEY_implementation_default}"/>
@@ -428,7 +430,7 @@ iSCSILogicalUnit_start() {
 	lio-t)
 		ocf_take_lock $TARGETLOCKFILE
 		ocf_release_lock_on_exit $TARGETLOCKFILE
-		iblock_attrib_path="/sys/kernel/config/target/core/iblock_${OCF_RESKEY_lio_iblock}/${OCF_RESOURCE_INSTANCE}/attrib"
+		iblock_attrib_path="/sys/kernel/config/target/core/iblock_*/${OCF_RESOURCE_INSTANCE}/attrib"
 		# For lio, we first have to create a target device, then
 		# add it to the Target Portal Group as an LU.
 		# Handle differently 'block', 'fileio' and 'pscsi'
@@ -445,8 +447,12 @@ iSCSILogicalUnit_start() {
 			ocf_run targetcli /backstores/${OCF_RESKEY_liot_bstype} create ${OCF_RESOURCE_INSTANCE} ${OCF_RESKEY_path} || exit $OCF_ERR_GENERIC
 		fi
 		if [ -n "${OCF_RESKEY_scsi_sn}" ]; then
-			echo ${OCF_RESKEY_scsi_sn} > /sys/kernel/config/target/core/iblock_${OCF_RESKEY_lio_iblock}/${OCF_RESOURCE_INSTANCE}/wwn/vpd_unit_serial
+			echo ${OCF_RESKEY_scsi_sn} > /sys/kernel/config/target/core/iblock_*/${OCF_RESOURCE_INSTANCE}/wwn/vpd_unit_serial
 		fi
+		if [ -n "${OCF_RESKEY_product_id}" ]; then
+			echo "${OCF_RESKEY_product_id}" > /sys/kernel/config/target/core/iblock_*/${OCF_RESOURCE_INSTANCE}/wwn/product_id
+		fi
+
 		ocf_run targetcli /iscsi/${OCF_RESKEY_target_iqn}/tpg1/luns create /backstores/${OCF_RESKEY_liot_bstype}/${OCF_RESOURCE_INSTANCE} ${OCF_RESKEY_lun} || exit $OCF_ERR_GENERIC
 
 		if $(ip a | grep -q inet6); then
@@ -460,8 +466,12 @@ iSCSILogicalUnit_start() {
 
 		if [ -n "${OCF_RESKEY_allowed_initiators}" ]; then
 			for initiator in ${OCF_RESKEY_allowed_initiators}; do
-				[ -d "/sys/kernel/config/target/iscsi/${OCF_RESKEY_target_iqn}/tpgt_1/acls" ] || ocf_run targetcli /iscsi/${OCF_RESKEY_target_iqn}/tpg1/acls create ${initiator} add_mapped_luns=False || exit $OCF_ERR_GENERIC
-				[ -d "/sys/kernel/config/target/iscsi/${OCF_RESKEY_target_iqn}/tpgt_1/acls/${initiator}" ] || ocf_run targetcli /iscsi/${OCF_RESKEY_target_iqn}/tpg1/acls/${initiator} create ${OCF_RESKEY_lun} ${OCF_RESKEY_lun} || exit $OCF_ERR_GENERIC
+				if [ -d "/sys/kernel/config/target/iscsi/${OCF_RESKEY_target_iqn}/tpgt_1/acls" ]  ;then
+					if ! [ -d "/sys/kernel/config/target/iscsi/${OCF_RESKEY_target_iqn}/tpgt_1/acls/${initiator}" ];then
+						ocf_run targetcli /iscsi/${OCF_RESKEY_target_iqn}/tpg1/acls create ${initiator} add_mapped_luns=False || exit $OCF_ERR_GENERIC
+						ocf_run targetcli /iscsi/${OCF_RESKEY_target_iqn}/tpg1/acls/${initiator} create ${OCF_RESKEY_lun} ${OCF_RESKEY_lun} || exit $OCF_ERR_GENERIC
+					fi  
+				fi
 			done
 		fi
 
@@ -474,6 +484,23 @@ iSCSILogicalUnit_start() {
 		if [ -n "${OCF_RESKEY_emulate_caw}" ]; then
 			echo ${OCF_RESKEY_emulate_caw} > ${iblock_attrib_path}/emulate_caw || exit $OCF_ERR_GENERIC
 		fi
+		;;
+	scst)
+		ocf_run scstadmin -open_dev "${OCF_RESOURCE_INSTANCE}" -handler vdisk_blockio -attributes "filename=${OCF_RESKEY_path},nv_cache=0,write_through=1"
+		if [ -n "${OCF_RESKEY_scsi_sn}" ]; then
+			ocf_run scstadmin -set_dev_attr "${OCF_RESOURCE_INSTANCE}" -attributes "usn=${OCF_RESKEY_scsi_sn}" -force -noprompt
+		fi
+		if [ -n "${OCF_RESKEY_vendor_id}" ]; then
+			ocf_run scstadmin -set_dev_attr "${OCF_RESOURCE_INSTANCE}" -attributes "t10_vend_id=${OCF_RESKEY_vendor_id}" -force -noprompt
+		fi
+		if [ -n "${OCF_RESKEY_product_id}" ]; then
+			ocf_run scstadmin -set_dev_attr "${OCF_RESOURCE_INSTANCE}" -attributes "t10_dev_id=${OCF_RESKEY_product_id}" -force -noprompt
+		fi
+		if [ -d "/sys/kernel/scst_tgt/targets/iscsi/${OCF_RESKEY_target_iqn}/ini_groups/allowed/" ]; then
+			# if an initiator group exists for the target, add the new LUN to it.
+			ocf_run scstadmin -add_lun ${OCF_RESKEY_lun} -driver iscsi -target "${OCF_RESKEY_target_iqn}" -device "${OCF_RESOURCE_INSTANCE}" -group allowed -force -noprompt
+		fi
+		ocf_run scstadmin -add_lun ${OCF_RESKEY_lun} -driver iscsi -target "${OCF_RESKEY_target_iqn}" -device "${OCF_RESOURCE_INSTANCE}" $group_arg -force -noprompt
 		;;
 	esac
 
@@ -548,6 +575,10 @@ iSCSILogicalUnit_stop() {
 		# (potentially causing fencing)
 		ocf_run targetcli /backstores/${OCF_RESKEY_liot_bstype} delete ${OCF_RESOURCE_INSTANCE} || exit $OCF_ERR_GENERIC
 		;;
+	scst)
+		ocf_run -warn scstadmin -rem_lun ${OCF_RESKEY_lun} -driver iscsi -target "${OCF_RESKEY_target_iqn}" -force -noprompt
+		ocf_run scstadmin -close_dev "${OCF_RESOURCE_INSTANCE}" -handler vdisk_blockio -force -noprompt
+		;;
 	esac
 
 	return $OCF_SUCCESS
@@ -605,6 +636,12 @@ iSCSILogicalUnit_monitor() {
 		[ -e ${block_configfs_path} ] && ocf_log warn "existing block without an active lun: ${block_configfs_path}"
 		[ -e ${block_configfs_path} ] && return $OCF_ERR_GENERIC
 		;;
+	scst)
+		[ -d /sys/kernel/scst_tgt/devices/${OCF_RESOURCE_INSTANCE} ] || return $OCF_NOT_RUNNING
+		[ $(cat /sys/kernel/scst_tgt/devices/${OCF_RESOURCE_INSTANCE}/active) -eq 1 ] || return $OCF_NOT_RUNNING
+		[ $(head -n1 /sys/kernel/scst_tgt/devices/${OCF_RESOURCE_INSTANCE}/filename) = "${OCF_RESKEY_path}" ] || return $OCF_NOT_RUNNING
+		[ -d /sys/kernel/scst_tgt/targets/iscsi/${OCF_RESKEY_target_iqn}/luns/${OCF_RESKEY_lun} ] && return $OCF_SUCCESS
+		;;
 	esac
 
 	return $OCF_NOT_RUNNING
@@ -622,7 +659,7 @@ iSCSILogicalUnit_validate() {
 
 	# Is the configured implementation supported?
 	case "$OCF_RESKEY_implementation" in
-	"iet"|"tgt"|"lio"|"lio-t")
+	"iet"|"tgt"|"lio"|"lio-t"|"scst")
 		;;
 	"")
 		# The user didn't specify an implementation, and we were
@@ -694,7 +731,10 @@ iSCSILogicalUnit_validate() {
 		unsupported_params="scsi_id vendor_id product_id tgt_bstype tgt_bsoflags tgt_bsopts tgt_device_type emulate_tpu emulate_3pc emulate_caw liot_bstype"
 		;;
 	lio-t)
-		unsupported_params="scsi_id vendor_id product_id tgt_bstype tgt_bsoflags tgt_bsopts tgt_device_type lio_iblock"
+		unsupported_params="scsi_id vendor_id tgt_bstype tgt_bsoflags tgt_bsopts tgt_device_type lio_iblock"
+		;;
+	scst)
+		unsupported_params="scsi_id emulate_tpu emulate_3pc emulate_caw"
 		;;
 	esac
 
@@ -729,6 +769,9 @@ iSCSILogicalUnit_validate() {
 	lio-t)
 		check_binary targetcli
 		;;
+	scst)
+		check_binary scstadmin
+		;;
 	esac
 
 	# Is the required kernel functionality available?
@@ -742,6 +785,12 @@ iSCSILogicalUnit_validate() {
 		;;
 	tgt)
 		# tgt is userland only
+		;;
+	scst)
+		if [ ! -d /sys/kernel/scst_tgt ]; then
+			ocf_log err "/sys/kernel/scst_tgt does not exist or is not a directory -- check if required modules are loaded."
+			exit $OCF_ERR_INSTALLED
+		fi
 		;;
 	esac
 	fi

@@ -34,10 +34,9 @@
 : ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
 . ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
 
-# Defaults
-OCF_RESKEY_openstackcli_default="/usr/bin/openstack"
+. ${OCF_FUNCTIONS_DIR}/openstack-common.sh
 
-: ${OCF_RESKEY_openstackcli=${OCF_RESKEY_openstackcli_default}}
+# Defaults
 
 #######################################################################
 
@@ -57,8 +56,8 @@ metadata() {
 cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="openstack-floating-ip">
-<version>2.0</version>
+<resource-agent name="openstack-floating-ip" version="2.0">
+<version>1.0</version>
 <longdesc lang="en">
 Resource Agent to move a floating IP address from an instance to another one.
 It relies on attributes given by openstack-info resource agent (openstack_ports, openstack_id attributes).
@@ -67,22 +66,11 @@ The attribute called "openstack_floating_ip" is updated.
 <shortdesc lang="en">Move a floating IP</shortdesc>
 
 <parameters>
-<parameter name="openstackcli">
-<longdesc lang="en">
-Path to command line tools for openstack.
-</longdesc>
-<shortdesc lang="en">Path to Openstack CLI tool</shortdesc>
-<content type="string" default="${OCF_RESKEY_openstackcli_default}" />
-</parameter>
+END
 
-<parameter name="openrc" required="1">
-<longdesc lang="en">
-Valid Openstack credentials as openrc file from api_access/openrc.
-</longdesc>
-<shortdesc lang="en">openrc file</shortdesc>
-<content type="string" />
-</parameter>
+common_meta_data
 
+cat <<END
 <parameter name="ip_id" required="1">
 <longdesc lang="en">
 Floating IP Identifier.
@@ -104,7 +92,7 @@ Subnet Identifier to use to attach the address.
 <actions>
 <action name="start" timeout="180s" />
 <action name="stop" timeout="180s" />
-<action name="monitor" depth="0" timeout="30s" interval="60s" />
+<action name="monitor" depth="0" timeout="180s" interval="60s" />
 <action name="validate-all" timeout="5s" />
 <action name="meta-data" timeout="5s" />
 </actions>
@@ -113,27 +101,20 @@ END
 }
 
 osflip_validate() {
+	local result
+
 	check_binary "$OCF_RESKEY_openstackcli"
 
-	if [ -z "$OCF_RESKEY_openrc" ]; then
-		ocf_exit_reason "openrc parameter not set"
-		return $OCF_ERR_CONFIGURED
-	fi
+	get_config
 
-	if [ ! -f "$OCF_RESKEY_openrc" ] ; then
-		ocf_exit_reason "openrc file not found"
-		return $OCF_ERR_CONFIGURED
-	fi
-
-	. $OCF_RESKEY_openrc
-
-	if ! $OCF_RESKEY_openstackcli floating ip list|grep -q $OCF_RESKEY_ip_id ; then
+	result=$(run_openstackcli "floating ip list")
+	if ! echo "$result" | grep -q $OCF_RESKEY_ip_id; then
 		ocf_exit_reason "ip-id $OCF_RESKEY_ip_id not found"
 		return $OCF_ERR_CONFIGURED
 	fi
 
 	${HA_SBIN_DIR}/attrd_updater --query -n openstack_ports -N $(crm_node -n) > /dev/null 2>&1
-	if [ $? -ne 0 ] ; then
+	if [ $? -ne 0 ] && ! ocf_is_probe; then
 		ocf_log warn "attr_updater failed to get openstack_ports attribute of node $OCF_RESOURCE_INSTANCE"
 		return $OCF_ERR_GENERIC
 	fi
@@ -147,30 +128,28 @@ osflip_monitor() {
 	local node_port_ids
 	local port
 	local buffer
-	local crm_node
 
-	crm_node=$(crm_node -n)
-	node_port_ids=$(${HA_SBIN_DIR}/attrd_updater --query -n openstack_ports -N $crm_node \
+	node_port_ids=$(${HA_SBIN_DIR}/attrd_updater --query -n openstack_ports -N $(crm_node -n) \
 		| awk -F= '{gsub("\"","");print $NF}' \
 		| tr ',' ' ' \
-		| awk -F: '{print $NF}')
+		| awk '{gsub("[^ ]*:", "");print}')
 
 	# Is the IP active and attached?
-	result=$($OCF_RESKEY_openstackcli floating ip show \
+	result=$(run_openstackcli "floating ip show \
 		--column port_id --column floating_ip_address \
 		--format yaml \
-		$OCF_RESKEY_ip_id)
+		$OCF_RESKEY_ip_id")
 
 	for port in $node_port_ids ; do
-		if echo $result | grep -q $port ; then
-			floating_ip=$(echo $result | awk '/floating_ip_address/ {print $2}')
-			${HA_SBIN_DIR}/attrd_updater ${OCF_RESKEY_delay} -S status -n openstack_floating_ip -v $floating_ip
+		if echo "$result" | grep -q $port ; then
+			floating_ip=$(echo "$result" | awk '/floating_ip_address/ {print $2}')
+			${HA_SBIN_DIR}/attrd_updater ${OCF_RESKEY_delay} -n openstack_floating_ip -v $floating_ip
 
 			return $OCF_SUCCESS
 		fi
 	done
 
-	${HA_SBIN_DIR}/attrd_updater ${OCF_RESKEY_delay} -D -S state -n openstack_floating_ip
+	${HA_SBIN_DIR}/attrd_updater ${OCF_RESKEY_delay} -D -n openstack_floating_ip
 	ocf_log warn "$OCF_RESKEY_ip_id is not attached to any fixed address"
 	return $OCF_NOT_RUNNING
 }
@@ -184,7 +163,7 @@ osflip_stop() {
 		return $OCF_SUCCESS
 	fi
 
-	if ! $OCF_RESKEY_openstackcli floating ip unset --port $OCF_RESKEY_ip_id ; then
+	if ! run_openstackcli "floating ip unset --port $OCF_RESKEY_ip_id"; then
 		return $OCF_ERR_GENERIC
 	fi
 
@@ -194,7 +173,7 @@ osflip_stop() {
 		return $OCF_ERR_GENERIC
 	fi
 
-	ocf_log info "Successfully brought unset $OCF_RESKEY_ip_id"
+	ocf_log info "Successfully brought down $OCF_RESKEY_ip_id"
 	return $OCF_SUCCESS
 }
 
@@ -218,7 +197,7 @@ osflip_start() {
 
 	ocf_log info "Moving IP address $OCF_RESKEY_ip_id to port ID $node_port_id"
 
-	$OCF_RESKEY_openstackcli floating ip set --port $node_port_id $OCF_RESKEY_ip_id
+	run_openstackcli "floating ip set --port $node_port_id $OCF_RESKEY_ip_id"
 	if [ $? != $OCF_SUCCESS ]; then
 		ocf_log error "$OCF_RESKEY_ip_id Cannot be set to port $node_port_id"
 		return $OCF_ERR_GENERIC
@@ -230,6 +209,7 @@ osflip_start() {
 		return $OCF_ERR_GENERIC
 	fi
 
+	ocf_log info "Successfully brought up $OCF_RESKEY_ip_id"
 	return $OCF_SUCCESS
 }
 
@@ -255,19 +235,23 @@ if ! ocf_is_root; then
 	exit $OCF_ERR_PERM
 fi
 
-osflip_validate
-
 case $__OCF_ACTION in
 	start)
+		osflip_validate || exit $?
 		osflip_start;;
 	stop)
+		osflip_validate || exit $?
 		osflip_stop;;
 	monitor)
+		osflip_validate || exit $?
 		osflip_monitor;;
 	validate-all)
-		exit $?;;
+		osflip_validate
+		;;
 	*)
 		echo $USAGE
 		exit $OCF_ERR_UNIMPLEMENTED
 		;;
 esac
+
+exit $?

@@ -81,6 +81,7 @@ fi
 AC_PROG_CC dnl Can force other with environment variable "CC".
 AM_PROG_CC_C_O
 AC_PROG_CC_STDC
+AC_PROG_CPP
 AC_PROG_AWK
 AC_PROG_LN_S
 AC_PROG_INSTALL
@@ -148,14 +149,14 @@ PKG_PROG_PKG_CONFIG(0.18)
 # PKG_CHECK_MODULES will fail if systemd is not found by default, so make sure
 # we set the proper vars and deal with it
 PKG_CHECK_MODULES([systemd], [systemd], [HAS_SYSTEMD=yes], [HAS_SYSTEMD=no])
-if test "x$HAS_SYSTEMD" == "xyes"; then
+if test "x$HAS_SYSTEMD" = "xyes"; then
 	PKG_CHECK_VAR([SYSTEMD_UNIT_DIR], [systemd], [systemdsystemunitdir])
-	if test "x$SYSTEMD_UNIT_DIR" == "x"; then
+	if test "x$SYSTEMD_UNIT_DIR" = "x"; then
 		AC_MSG_ERROR([Unable to detect systemd unit dir automatically])
 	fi
 
 	PKG_CHECK_VAR([SYSTEMD_TMPFILES_DIR], [systemd], [tmpfilesdir])
-	if test "x$SYSTEMD_TMPFILES_DIR" == "x"; then
+	if test "x$SYSTEMD_TMPFILES_DIR" = "x"; then
 		AC_MSG_ERROR([Unable to detect systemd tmpfiles directory automatically])
 	fi
 
@@ -168,7 +169,7 @@ if test "x$HAS_SYSTEMD" == "xyes"; then
 	fi
 
 fi
-AM_CONDITIONAL(HAVE_SYSTEMD, [test "x$HAS_SYSTEMD" == xyes ])
+AM_CONDITIONAL(HAVE_SYSTEMD, [test "x$HAS_SYSTEMD" = xyes ])
 
 
 dnl ===============================================
@@ -185,7 +186,7 @@ AC_SUBST(PKGNAME)
 
 AC_ARG_ENABLE([ansi],
 [  --enable-ansi force GCC to compile to ANSI/ANSI standard for older compilers.
-     [default=yes]])
+     [default=no]])
 
 AC_ARG_ENABLE([fatal-warnings],
 [  --enable-fatal-warnings very pedantic and fatal warnings for gcc
@@ -206,7 +207,7 @@ AC_ARG_WITH(rsctmpdir,
     [ HA_RSCTMPDIR="$withval" ])
 
 AC_ARG_ENABLE([libnet],
- [  --enable-libnet 	Use libnet for ARP based funcationality, [default=try]], 
+ [  --enable-libnet 	Use libnet for ARP based functionality, [default=try]], 
  [enable_libnet="$enableval"], [enable_libnet=try])
 
 BUILD_RGMANAGER=0
@@ -413,9 +414,7 @@ dnl Variables needed for substitution
 
 AC_CHECK_HEADERS(heartbeat/glue_config.h)
 
-if test "$ac_cv_header_heartbeat_glue_config_h" = "yes"; then
-  OCF_ROOT_DIR=`extract_header_define heartbeat/glue_config.h OCF_ROOT_DIR`
-else
+if test "$ac_cv_header_heartbeat_glue_config_h" != "yes"; then
   enable_libnet=no
 fi
 
@@ -472,6 +471,8 @@ PATH="$PATH:/sbin:/usr/sbin:/usr/local/sbin:/usr/local/bin"
 export PATH
 
 AC_CHECK_PROGS(MAKE, gmake make)
+AC_CHECK_PROGS(SHELLCHECK, shellcheck)
+AM_CONDITIONAL(CI_CHECKS, test "x$SHELLCHECK" != "x" )
 AC_PATH_PROGS(BASH_SHELL, bash)
 if test x"${BASH_SHELL}" = x""; then
    AC_MSG_ERROR(You need bash installed in order to build ${PACKAGE})
@@ -502,6 +503,12 @@ AC_SUBST(PING)
 AC_SUBST(RM)
 AC_SUBST(TEST)
 
+AM_PATH_PYTHON([3.6])
+if test -z "$PYTHON"; then
+    echo "*** Essential program python not found" 1>&2
+    exit 1
+fi
+
 dnl Ensure PYTHON is an absolute path
 AC_PATH_PROG([PYTHON], [$PYTHON])
 
@@ -510,10 +517,12 @@ if test -z "$PYTHON"; then
     echo "*** Essential program python not found" 1>&2
 fi
 
-AC_PYTHON_MODULE(googleapiclient)
+AC_PYTHON_MODULE(json)
 AC_PYTHON_MODULE(pyroute2)
+AC_PYTHON_MODULE(requests)
+AC_PYTHON_MODULE(urllib3)
 
-AS_VERSION_COMPARE([$PYTHON_VERSION], [2.7], [BUILD_OCF_PY=0], [BUILD_OCF_PY=1], [BUILD_OCF_PY=1])
+AS_VERSION_COMPARE([$PYTHON_VERSION], [3.6], [BUILD_OCF_PY=0], [BUILD_OCF_PY=1], [BUILD_OCF_PY=1])
 
 BUILD_AZURE_EVENTS=1
 if test -z "$PYTHON" || test $BUILD_OCF_PY -eq 0; then
@@ -522,27 +531,40 @@ if test -z "$PYTHON" || test $BUILD_OCF_PY -eq 0; then
 fi
 AM_CONDITIONAL(BUILD_AZURE_EVENTS, test $BUILD_AZURE_EVENTS -eq 1)
 
+BUILD_AZURE_EVENTS_AZ=1
+if test -z "$PYTHON" || test $BUILD_OCF_PY -eq 0; then
+    BUILD_AZURE_EVENTS_AZ=0
+    AC_MSG_WARN("Not building azure-events-az")
+fi
+AM_CONDITIONAL(BUILD_AZURE_EVENTS_AZ, test $BUILD_AZURE_EVENTS_AZ -eq 1)
+
 BUILD_GCP_PD_MOVE=1
-if test -z "$PYTHON" || test "x${HAVE_PYMOD_GOOGLEAPICLIENT}" != xyes || test $BUILD_OCF_PY -eq 0; then
+if test -z "$PYTHON" || test $BUILD_OCF_PY -eq 0; then
     BUILD_GCP_PD_MOVE=0
     AC_MSG_WARN("Not building gcp-pd-move")
 fi
 AM_CONDITIONAL(BUILD_GCP_PD_MOVE, test $BUILD_GCP_PD_MOVE -eq 1)
 
 BUILD_GCP_VPC_MOVE_ROUTE=1
-if test -z "$PYTHON" || test "x${HAVE_PYMOD_GOOGLEAPICLIENT}" != xyes || \
-   test "x${HAVE_PYMOD_PYROUTE2}" != xyes || test $BUILD_OCF_PY -eq 0; then
+if test -z "$PYTHON" || test "x${HAVE_PYMOD_PYROUTE2}" != xyes || test $BUILD_OCF_PY -eq 0; then
     BUILD_GCP_VPC_MOVE_ROUTE=0
     AC_MSG_WARN("Not building gcp-vpc-move-route")
 fi
 AM_CONDITIONAL(BUILD_GCP_VPC_MOVE_ROUTE, test $BUILD_GCP_VPC_MOVE_ROUTE -eq 1)
 
 BUILD_GCP_VPC_MOVE_VIP=1
-if test -z "$PYTHON" || test "x${HAVE_PYMOD_GOOGLEAPICLIENT}" != xyes || test $BUILD_OCF_PY -eq 0; then
+if test -z "$PYTHON" || test $BUILD_OCF_PY -eq 0; then
     BUILD_GCP_VPC_MOVE_VIP=0
     AC_MSG_WARN("Not building gcp-vpc-move-vip")
 fi
 AM_CONDITIONAL(BUILD_GCP_VPC_MOVE_VIP, test $BUILD_GCP_VPC_MOVE_VIP -eq 1)
+
+BUILD_POWERVS_SUBNET=1
+if test -z "$PYTHON" || test $BUILD_OCF_PY -eq 0 || test "x${HAVE_PYMOD_REQUESTS}" != xyes || test "x${HAVE_PYMOD_URLLIB3}" != xyes; then
+    BUILD_POWERVS_SUBNET=0
+    AC_MSG_WARN("Not building powervs-subnet")
+fi
+AM_CONDITIONAL(BUILD_POWERVS_SUBNET, test $BUILD_POWERVS_SUBNET -eq 1)
 
 AC_PATH_PROGS(ROUTE, route)
 AC_DEFINE_UNQUOTED(ROUTE, "$ROUTE", path to route command)
@@ -581,7 +603,7 @@ if test x"${XSLTPROC}" != x""; then
         if test x"${DIRS}" = x""; then
             # when datadir is not standard OS path, we cannot find docbook.xsl
             # use standard OS path as backup
-            DIRS=$(find "/usr/share" -name $(basename $(dirname ${DOCBOOK_XSL_PATH})) \
+            DIRS=$(find "/usr/share" "/usr/local/share" -name $(basename $(dirname ${DOCBOOK_XSL_PATH})) \
                    -type d | LC_ALL=C sort)
         fi
         XSLT=$(basename ${DOCBOOK_XSL_PATH})
@@ -614,6 +636,7 @@ fi
 PKG_CHECK_MODULES([GLIB], [$GPKGNAME])
 CPPFLAGS="$CPPFLAGS $GLIB_CFLAGS"
 LIBS="$LIBS $GLIB_LIBS"
+PKG_CHECK_MODULES([LIBQB], "libqb")
 
 dnl ========================================================================
 dnl Headers
@@ -788,11 +811,15 @@ case $host_os in
      *Linux*|*linux*) sendarp_linux=1;;
 esac
 
+redhat_based=0
+AC_CHECK_FILE(/etc/redhat-release, [redhat_based=1])
+
 AC_SUBST(LIBNETLIBS)
 AC_SUBST(LIBNETDEFINES)
 
 AM_CONDITIONAL(SENDARP_LINUX, test $sendarp_linux = 1 )
 AM_CONDITIONAL(USE_LIBNET, test "x$libnet_version" != "xnone" )
+AM_CONDITIONAL(NFSCONVERT, test $redhat_based = 1 )
 
 dnl ************************************************************************
 dnl * Check for netinet/icmp6.h to enable the IPv6addr resource agent
@@ -850,7 +877,8 @@ else
 		-Wpointer-arith 
 		-Wstrict-prototypes
 		-Wunsigned-char
-		-Wwrite-strings"
+		-Wwrite-strings
+		-Wno-maybe-uninitialized"
 
 # Additional warnings it might be nice to enable one day
 #		-Wshadow
@@ -886,7 +914,7 @@ dnl System specific options
 	   enable_fatal_warnings=no
         fi
 
-	if test "x${enable_ansi}" != xno && cc_supports_flag -std=iso9899:199409 ; then
+	if test "x${enable_ansi}" = xyes && cc_supports_flag -std=iso9899:199409; then
 	  AC_MSG_NOTICE(Enabling ANSI Compatibility)
 	  CC_EXTRAS="$CC_EXTRAS -ansi -D_GNU_SOURCE -DANSI_ONLY"
 	fi
@@ -933,6 +961,7 @@ heartbeat/Makefile						\
 systemd/Makefile						\
    systemd/resource-agents.conf					\
 tools/Makefile							\
+   tools/nfsconvert						\
    tools/ocf-tester						\
    tools/ocft/Makefile						\
    tools/ocft/ocft						\
@@ -969,6 +998,7 @@ rgmanager/Makefile						\
 
 dnl Files we output that need to be executable
 AC_CONFIG_FILES([heartbeat/azure-events], [chmod +x heartbeat/azure-events])
+AC_CONFIG_FILES([heartbeat/azure-events-az], [chmod +x heartbeat/azure-events-az])
 AC_CONFIG_FILES([heartbeat/AoEtarget], [chmod +x heartbeat/AoEtarget])
 AC_CONFIG_FILES([heartbeat/ManageRAID], [chmod +x heartbeat/ManageRAID])
 AC_CONFIG_FILES([heartbeat/ManageVE], [chmod +x heartbeat/ManageVE])
@@ -981,6 +1011,7 @@ AC_CONFIG_FILES([heartbeat/dnsupdate], [chmod +x heartbeat/dnsupdate])
 AC_CONFIG_FILES([heartbeat/dummypy], [chmod +x heartbeat/dummypy])
 AC_CONFIG_FILES([heartbeat/eDir88], [chmod +x heartbeat/eDir88])
 AC_CONFIG_FILES([heartbeat/fio], [chmod +x heartbeat/fio])
+AC_CONFIG_FILES([heartbeat/galera], [chmod +x heartbeat/galera])
 AC_CONFIG_FILES([heartbeat/gcp-pd-move], [chmod +x heartbeat/gcp-pd-move])
 AC_CONFIG_FILES([heartbeat/gcp-vpc-move-ip], [chmod +x heartbeat/gcp-vpc-move-ip])
 AC_CONFIG_FILES([heartbeat/gcp-vpc-move-vip], [chmod +x heartbeat/gcp-vpc-move-vip])
@@ -995,10 +1026,15 @@ AC_CONFIG_FILES([heartbeat/machine-info], [chmod +x heartbeat/machine-info])
 AC_CONFIG_FILES([heartbeat/mariadb], [chmod +x heartbeat/mariadb])
 AC_CONFIG_FILES([heartbeat/mpathpersist], [chmod +x heartbeat/mpathpersist])
 AC_CONFIG_FILES([heartbeat/nfsnotify], [chmod +x heartbeat/nfsnotify])
+AC_CONFIG_FILES([heartbeat/openstack-info], [chmod +x heartbeat/openstack-info])
+AC_CONFIG_FILES([heartbeat/powervs-subnet], [chmod +x heartbeat/powervs-subnet])
+AC_CONFIG_FILES([heartbeat/rabbitmq-cluster], [chmod +x heartbeat/rabbitmq-cluster])
 AC_CONFIG_FILES([heartbeat/redis], [chmod +x heartbeat/redis])
 AC_CONFIG_FILES([heartbeat/rsyslog], [chmod +x heartbeat/rsyslog])
+AC_CONFIG_FILES([heartbeat/smb-share], [chmod +x heartbeat/smb-share])
 AC_CONFIG_FILES([heartbeat/sg_persist], [chmod +x heartbeat/sg_persist])
 AC_CONFIG_FILES([heartbeat/slapd], [chmod +x heartbeat/slapd])
+AC_CONFIG_FILES([heartbeat/storage-mon], [chmod +x heartbeat/storage-mon])
 AC_CONFIG_FILES([heartbeat/sybaseASE], [chmod +x heartbeat/sybaseASE])
 AC_CONFIG_FILES([heartbeat/syslog-ng], [chmod +x heartbeat/syslog-ng])
 AC_CONFIG_FILES([heartbeat/vsftpd], [chmod +x heartbeat/vsftpd])
@@ -1043,7 +1079,7 @@ dnl *****************
 AC_MSG_RESULT([])
 AC_MSG_RESULT([$PACKAGE configuration:])
 AC_MSG_RESULT([  Version                  = ${VERSION}])
-AC_MSG_RESULT([  Build Version            = 46e3312f2f0abc91308d16d4acb33ef88cd04905])
+AC_MSG_RESULT([  Build Version            = a6ccb93a9f0c9a86dec2c3f6c823c8c6a8da711f])
 AC_MSG_RESULT([])
 AC_MSG_RESULT([  Prefix                   = ${prefix}])
 AC_MSG_RESULT([  Executables              = ${sbindir}])

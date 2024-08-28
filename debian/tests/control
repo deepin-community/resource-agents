@@ -7,7 +7,7 @@ Depends: ldirectord
 Restrictions: needs-root, isolation-container
 
 Test-Command: debian/tests/run-ocft MailTo
-Depends: resource-agents, bsd-mailx
+Depends: resource-agents, bsd-mailx, exim4
 Restrictions: needs-root, isolation-container
 
 Test-Command: debian/tests/run-ocft apache

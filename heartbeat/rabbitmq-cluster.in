@@ -1,4 +1,4 @@
-#!/bin/sh
+#!@BASH_SHELL@
 #
 # Copyright (c) 2014 David Vossel <davidvossel@gmail.com>
 #                    All Rights Reserved.
@@ -67,7 +67,7 @@ meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="rabbitmq-cluster">
+<resource-agent name="rabbitmq-cluster" version="1.0">
 <version>1.0</version>
 
 <longdesc lang="en">
@@ -195,7 +195,7 @@ rmq_join_list()
 		# ...
 		local remote_join_list=$(cibadmin -Q --xpath "//node_state//nvpair[@name='$RMQ_CRM_ATTR_COOKIE']" | grep "$RMQ_CRM_ATTR_COOKIE" | sed -n -e "s/^.*value=.\(.*\)\".*$/\1/p")
 		# The following expression prepares a filter like '-e overcloud-rabbit-0 -e overcloud-rabbit-1 -e ...'
-		local filter=$(crm_mon -r --as-xml | xmllint --format --xpath "//nodes//node[@online='true' and @standby='false']/@name" - | xargs -n1 echo | awk -F= '{print "-e "$2}')
+		local filter=$(crm_mon_no_validation -r $XMLOPT | xmllint --format --xpath "//nodes//node[@online='true' and @standby='false']/@name" - | xargs -n1 echo | awk -F= '{print "-e "$2}')
 		# export the intersection which gives us only the nodes that
 		# a) wrote their namein the cib attrd
 		# b) run on nodes where pacemaker_remote is enabled
@@ -488,7 +488,11 @@ rmq_try_start() {
 
 	rmq_stop
 	rmq_wipe_data
-	rmq_forget_cluster_node_remotely "$join_list" "$local_rmq_node"
+	if [ -z "$local_rmq_node" ]; then
+		ocf_log warn "Unable to forget the cluster node because local node name cannot be detected"
+	else
+		rmq_forget_cluster_node_remotely "$join_list" "$local_rmq_node"
+	fi
 	rmq_join_existing "$join_list"
 	rc=$?
 
@@ -605,6 +609,21 @@ rmq_validate() {
 
 	return $OCF_SUCCESS
 }
+
+ocf_version_cmp "$OCF_RESKEY_crm_feature_set" "3.1.0"
+res=$?
+if [ -z "$OCF_RESKEY_crm_feature_set" ] || [ $res -eq 2 ]; then
+    XMLOPT="--output-as=xml"
+    ocf_version_cmp "$OCF_RESKEY_crm_feature_set" "3.2.0"
+    if [ $? -eq 1 ]; then
+        crm_mon_no_validation -1 $XMLOPT >/dev/null 2>&1
+        if [ $? -ne 0 ]; then
+            XMLOPT="--as-xml"
+        fi
+    fi
+else
+    XMLOPT="--as-xml"
+fi
 
 case $__OCF_ACTION in
 meta-data)	meta_data

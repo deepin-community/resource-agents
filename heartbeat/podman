@@ -47,7 +47,7 @@ meta_data()
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="podman">
+<resource-agent name="podman" version="1.0">
 <version>1.0</version>
 
 <longdesc lang="en">
@@ -204,14 +204,19 @@ monitor_cmd_exec()
 	# 125: no container with name or ID ${CONTAINER} found
 	# 126: container state improper (not running)
 	# 127: any other error
-	if [ $rc -eq 125 ] || [ $rc -eq 126 ]; then
-		rc=$OCF_NOT_RUNNING
-	elif [ $rc -ne 0 ]; then
-		ocf_exit_reason "monitor cmd failed (rc=$rc), output: $out"
-		rc=$OCF_ERR_GENERIC
-	else
-		ocf_log debug "monitor cmd passed: exit code = $rc"
-	fi
+	# 255: podman 2+: container not running
+	case "$rc" in
+		125|126|255)
+			rc=$OCF_NOT_RUNNING
+			;;
+		0)
+			ocf_log debug "monitor cmd passed: exit code = $rc"
+			;;
+		*)
+			ocf_exit_reason "monitor cmd failed (rc=$rc), output: $out"
+			rc=$OCF_ERR_GENERIC
+			;;
+	esac
 
 	return $rc
 }
@@ -246,7 +251,7 @@ remove_container()
 		return 0
 	fi
 	ocf_log notice "Cleaning up inactive container, ${CONTAINER}."
-	ocf_run podman rm $CONTAINER
+	ocf_run podman rm -v $CONTAINER
 	rc=$?
 	if [ $rc -ne 0 ]; then
 		# due to a podman bug (rhbz#1841485), sometimes a stopped
@@ -317,7 +322,7 @@ create_transient_drop_in_dependency()
 	local rc=$OCF_SUCCESS
 
 	if [ -z "$cid" ]; then
-		ocf_log error "Container ID not found for \"$CONTAINER\". Not creating drop-in dependency"
+		ocf_exit_reason "Container ID not found for \"$CONTAINER\". Not creating drop-in dependency"
 		return $OCF_ERR_GENERIC
 	fi
 
@@ -353,18 +358,51 @@ run_new_container()
 	local rc
 	
 	ocf_log info "running container $CONTAINER for the first time"
-	ocf_run podman run $opts $image $cmd
+	out=$(podman run $opts $image $cmd 2>&1)
 	rc=$?
+
+	if [ -n "$out" ]; then
+		out="$(echo "$out" | tr -s ' \t\r\n' ' ')"
+		if [ $rc -eq 0 ]; then
+			ocf_log info "$out"
+		else
+			ocf_log err "$out"
+		fi
+	fi
+
 	if [ $rc -eq 125 ]; then
 		# If an internal podman error occurred, it might be because
 		# the internal storage layer still references an old container
 		# with the same name, even though podman itself thinks there
 		# is no such container. If so, purge the storage layer to try
 		# to clean the corruption and try again.
+		if echo "$out" | grep -q "unknown.*flag"; then
+			ocf_exit_reason "$out"
+			return $rc
+		fi
+
 		ocf_log warn "Internal podman error while creating new container $CONTAINER. Retrying."
 		ocf_run podman rm --storage $CONTAINER
 		ocf_run podman run $opts $image $cmd
 		rc=$?
+	elif [ $rc -eq 127 ]; then
+		# rhbz#1972209: podman 3.0.x seems to be hit by a race
+		# where the cgroup is not yet set up properly when the OCI
+		# runtime configures the container. If that happens, recreate
+		# the container as long as we get the same error code or
+		# until start timeout preempts us.
+		while [ $rc -eq 127 ] && (echo "$out" | grep -q "cgroup.*scope not found") ; do
+			ocf_log warn "Internal podman error while assigning cgroup. Retrying."
+			# Arbitrary sleep to prevent consuming all CPU while looping
+			sleep 1
+			podman rm -f "$CONTAINER"
+			out=$(podman run $opts $image $cmd 2>&1)
+			rc=$?
+		done
+		# Log the created container ID if it succeeded
+		if  [ $rc -eq 0 ]; then
+			ocf_log info "$out"
+		fi
 	fi
 	
 	return $rc
@@ -405,6 +443,10 @@ podman_start()
 		# we already know at this point it wouldn't be running
 		remove_container
 		run_new_container "$run_opts" $OCF_RESKEY_image "$OCF_RESKEY_run_cmd"
+		if [ $? -eq 125 ]; then
+			return $OCF_ERR_GENERIC
+		fi
+
 	fi
 	rc=$?
 
@@ -417,7 +459,7 @@ podman_start()
 	fi
 
 	if [ $rc -ne 0 ]; then
-		ocf_exit_reason "podman failed to launch container"
+		ocf_exit_reason "podman failed to launch container (rc: $rc)"
 		return $OCF_ERR_GENERIC
 	fi
 
