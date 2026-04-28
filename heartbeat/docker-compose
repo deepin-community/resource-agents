@@ -54,8 +54,8 @@ meta_data()
 cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="docker-compose">
-<version>1.0.3</version>
+<resource-agent name="docker-compose" version="1.0.3">
+<version>1.0</version>
 <longdesc lang="en">
 Manages docker services using docker-compose as an OCF resource in an High Availability setup.
 It relies on a well-tested docker compose YAML file which distributed on an identical location on all cluster nodes.
@@ -113,7 +113,13 @@ exit $OCF_SUCCESS
 if [ -r "$OCF_RESKEY_binpath" -a -x "$OCF_RESKEY_binpath" ]; then
 	COMMAND="$OCF_RESKEY_binpath"
 else
+	OCF_RESKEY_binpath="$OCF_RESKEY_binpath_default"
 	COMMAND="$OCF_RESKEY_binpath_default"
+fi
+
+if ! $COMMAND -v 2>&1 | grep -q "^docker-compose version 1\."; then
+	OCF_RESKEY_binpath="${OCF_RESKEY_binpath%%-compose}"
+	COMMAND="$OCF_RESKEY_binpath compose"
 fi
 
 DIR="$OCF_RESKEY_dirpath"
@@ -138,19 +144,15 @@ docker_compose_status()
 {
 	# use docker-compose ps if YML found, otherwise try docker ps and kill containers
 	if [ -r "$DIR/$YML" ]; then
+		DKPS=$(cd $DIR; $COMMAND -f $YML ps -q)
 
-		DKPS=$(cd $DIR; $COMMAND ps -q)
-		STAT_MSG=$(docker ps --no-trunc | grep -E $(echo "$DKPS" | tr '\n' '|') | expand)
-		LNWTH=$(echo "$STAT_MSG" | head -n1 | wc -c)
-		STATEPOS=$(echo "$STAT_MSG" | head -n1 | egrep -o 'STATUS.*$' | wc -c)
-		OFFSET=$(($LNWTH-$STATEPOS+1))
-
-		if [ -n "$DKPS" ]; then
-			PSNU=$(echo "$DKPS" | wc -l)
-		else
-			PSNU=0
-		fi
-		UPNU=$(echo "$STAT_MSG" | cut -c ${OFFSET}- | awk '{print $1}' | grep -w '^Up' | wc -l)
+		# get number of all containers
+		[ -n "$DKPS" ] && PSNU=$(echo "$DKPS" | wc -l)
+		# get number of running containers
+		for UUID in $DKPS; do
+			UP=$(docker inspect --format='{{.State.Running}}' "$UUID")
+			[ "$UP" = "true" ] && UPNU=$((UPNU+1))
+		done
 		
 		if [ "${PSNU:-0}" -ne 0 ]; then
 			if [ ${UPNU:-0} -eq 0 ]; then
@@ -190,7 +192,7 @@ docker_compose_start()
 	[ $retVal -eq $OCF_SUCCESS ] && exit $OCF_SUCCESS
 
 	cd $DIR
-	$COMMAND up -d || {
+	$COMMAND -f $YML up -d || {
 		ocf_log err "Error. docker-compose returned error $?."
 		exit $OCF_ERR_GENERIC
 	}
@@ -205,7 +207,7 @@ docker_compose_stop()
 	if [ -r "$DIR/$YML" ]; then
 		docker_compose_validate_all
 		cd $DIR
-		$COMMAND down || {
+		$COMMAND -f $YML down || {
 			ocf_log err "Error on shutting down docker service, try docker kill..."
 			RUN_KILL=true
 		}

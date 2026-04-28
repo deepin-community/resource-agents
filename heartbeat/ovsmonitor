@@ -72,8 +72,8 @@ meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="ovsmonitor">
-<version>0.1</version>
+<resource-agent name="ovsmonitor" version="0.1">
+<version>1.0</version>
 
 <longdesc lang="en">
 Monitor the vitality of a local ovs bond.
@@ -355,7 +355,7 @@ END
 
 set_cib_value() {
 	local score=`expr $1 \* $OCF_RESKEY_multiplier`
-	attrd_updater -n $ATTRNAME -v $score -q
+	attrd_updater -n $ATTRNAME -v $score
 	local rc=$?
 	case $rc in
 		0) ocf_log debug "attrd_updater: Updated $ATTRNAME = $score" ;;
@@ -437,6 +437,7 @@ if_validate() {
 	check_binary ovs-vsctl
 	check_binary ovs-appctl
 	check_binary ovs-ofctl
+	check_binary bc
 	if_init
 }
 

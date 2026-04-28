@@ -50,7 +50,7 @@ meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="Route">
+<resource-agent name="Route" version="1.0">
 <version>1.0</version>
 
 <longdesc lang="en">
@@ -242,7 +242,11 @@ route_status() {
     else
 	# "ip route show" returned an error code. Assume something
 	# went wrong.
-	return $OCF_ERR_GENERIC
+	if ocf_is_probe; then
+	    return $OCF_NOT_RUNNING
+	else
+	    return $OCF_ERR_GENERIC
+	fi
     fi
 }
 

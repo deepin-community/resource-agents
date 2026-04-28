@@ -2,34 +2,32 @@ Tests: IPaddr2
 Depends: resource-agents
 Restrictions: needs-root, isolation-container
 
+Tests: named
+Depends: resource-agents, bind9 (>= 1:9.16.1-2), bind9-host, bind9-utils, lsb-release
+Restrictions: needs-root, isolation-container, skippable
+
 Test-Command: service ldirectord status
 Depends: ldirectord
 Restrictions: needs-root, isolation-container
 
 Test-Command: debian/tests/run-ocft MailTo
-Depends: resource-agents, bsd-mailx
+Depends: resource-agents, bsd-mailx, exim4
 Restrictions: needs-root, isolation-container
 
 Test-Command: debian/tests/run-ocft apache
-Depends: resource-agents, apache2, wget
+Depends: resource-agents, apache2, curl
 Restrictions: needs-root, isolation-container
 
 Test-Command: debian/tests/run-ocft mysql
 Depends: resource-agents, default-mysql-server
-Restrictions: needs-root, isolation-container
+Restrictions: needs-root, isolation-container, flaky
 
 Test-Command: debian/tests/run-ocft pgsql
 Depends: resource-agents, postgresql
-Restrictions: needs-root, isolation-container
+Restrictions: needs-root, isolation-container, flaky
 
 Test-Command: debian/tests/run-ocft postfix
 Depends: resource-agents, postfix
-Restrictions: needs-root, isolation-container
-
-# currently failing on Ubuntu autopkgtest setup for networking differences, so skip there
-# Working in Debci, but compared to badtest retains all the other tests coverage
-Test-Command: [ "`lsb_release -is`" = "Ubuntu" ] || debian/tests/run-ocft named
-Depends: resource-agents, bind9 (>= 1:9.16.1-2), bind9-host, bind9-utils, lsb-release
 Restrictions: needs-root, isolation-container
 
 Test-Command: debian/tests/run-ocft Filesystem

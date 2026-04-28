@@ -1,13 +1,26 @@
 # ignore manpage warnings
-resource-agents: no-manual-page usr/sbin/ocft
-resource-agents: no-manual-page usr/sbin/sfex_stat
-resource-agents: groff-message usr/share/man/man7/ocf_heartbeat_openstack-info.7.gz 37: warning [p 1, 2.3i]: can't break line
+resource-agents: no-manual-page [usr/sbin/ocft]
+resource-agents: no-manual-page [usr/sbin/sfex_stat]
+resource-agents: groff-message 37: warning [p 1, 2.3i]: can't break line [usr/share/man/man7/ocf_heartbeat_openstack-info.7.gz:1] 
 
 # these are sourced shell libraries:
-resource-agents: script-not-executable usr/lib/ocf/lib/heartbeat/findif.sh
-resource-agents: script-not-executable usr/lib/ocf/lib/heartbeat/mysql-common.sh
+resource-agents: script-not-executable [usr/lib/ocf/lib/heartbeat/findif.sh]
+resource-agents: script-not-executable [usr/lib/ocf/lib/heartbeat/mysql-common.sh]
 
-# ignore notices about usr/lib
-resource-agents: executable-in-usr-lib usr/lib/heartbeat/*
-resource-agents: executable-in-usr-lib usr/lib/ocf/resource.d/heartbeat/*
-resource-agents: repeated-path-segment lib usr/lib/ocf/lib/
+# ignore capitalization in agent names
+resource-agents: capitalization-error-in-description apache Apache
+resource-agents: capitalization-error-in-description mysql MySQL
+
+# ignore bash false positives
+resource-agents: bash-term-in-posix-shell '-{uuid,label}' [usr/lib/ocf/resource.d/heartbeat/Filesystem:173]
+resource-agents: bash-term-in-posix-shell '(({Node, [], OkChannelsCount}))' [usr/lib/ocf/resource.d/heartbeat/rabbitmq-server-ha:2090]
+resource-agents: bash-term-in-posix-shell 'a[1]=' [usr/lib/ocf/resource.d/heartbeat/nginx:233]
+resource-agents: bash-term-in-posix-shell 'function allfiles(' [usr/lib/ocf/resource.d/heartbeat/nginx:246]
+resource-agents: bash-term-in-posix-shell 'function is' [usr/lib/ocf/resource.d/heartbeat/portblock:145]
+resource-agents: bash-term-in-posix-shell 'function isdir(' [usr/lib/ocf/resource.d/heartbeat/nginx:270]
+resource-agents: bash-term-in-posix-shell 'function listfiles(' [usr/lib/ocf/resource.d/heartbeat/nginx:253]
+resource-agents: bash-term-in-posix-shell 'function printfile(' [usr/lib/ocf/resource.d/heartbeat/nginx:240]
+resource-agents: bash-term-in-posix-shell 'function procinclude(' [usr/lib/ocf/resource.d/heartbeat/nginx:260]
+resource-agents: bash-term-in-posix-shell 'function procline(' [usr/lib/ocf/resource.d/heartbeat/nginx:228]
+resource-agents: bash-term-in-posix-shell 'let' [usr/lib/ocf/resource.d/heartbeat/LinuxSCSI:59]
+resource-agents: bash-term-in-posix-shell 'source address.' [usr/lib/ocf/resource.d/heartbeat/IPsrcaddr:112]
