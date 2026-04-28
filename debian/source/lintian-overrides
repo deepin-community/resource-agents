@@ -1,0 +1,3 @@
+# allow custom variables in install files
+dh-exec-subst-unknown-variable deb_systemdsystemunitdir [debian/ldirectord.install:7]
+dh-exec-subst-unknown-variable deb_systemdsystemunitdir [debian/resource-agents.install:3]

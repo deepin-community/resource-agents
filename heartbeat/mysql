@@ -75,7 +75,7 @@ meta_data() {
    cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="mysql">
+<resource-agent name="mysql" version="1.0">
 <version>1.0</version>
 
 <longdesc lang="en">
@@ -239,6 +239,15 @@ The port on which the Master MySQL instance is listening.
 <content type="string" default="${OCF_RESKEY_replication_port_default}" />
 </parameter>
 
+<parameter name="replication_require_ssl" unique="0" required="0">
+<longdesc lang="en">
+Enables SSL connection to local MySQL service for replication user.
+i.e. if REQUIRE SSL for replication user in MySQL set, this should be set to "true".
+</longdesc>
+<shortdesc lang="en">MySQL replication require ssl</shortdesc>
+<content type="string" default="${OCF_RESKEY_replication_require_ssl_default}" />
+</parameter>
+
 <parameter name="replication_master_ssl_ca" unique="0" required="0">
 <longdesc lang="en">
 The SSL CA certificate to be used for replication over SSL.
@@ -312,8 +321,7 @@ whether a node is usable for clients to read from.</shortdesc>
 <action name="stop" timeout="120s" />
 <action name="status" timeout="60s" />
 <action name="monitor" depth="0" timeout="30s" interval="20s" />
-<action name="monitor" role="Master" depth="0" timeout="30s" interval="10s" />
-<action name="monitor" role="Slave" depth="0" timeout="30s" interval="30s" />
+<action name="monitor" role="Promoted" depth="0" timeout="30s" interval="10s" />
 <action name="promote" timeout="120s" />
 <action name="demote" timeout="120s" />
 <action name="notify" timeout="90s" />
@@ -508,17 +516,6 @@ check_slave() {
 
                 exit $OCF_ERR_INSTALLED
             fi
-        elif ocf_is_ms; then
-            # Even if we're not set to evict lagging slaves, we can
-            # still use the seconds behind master value to set our
-            # master preference.
-            local master_pref
-            master_pref=$((${OCF_RESKEY_max_slave_lag}-${secs_behind}))
-            if [ $master_pref -lt 0 ]; then
-                # Sanitize a below-zero preference to just zero
-                master_pref=0
-            fi
-            $CRM_MASTER -v $master_pref
         fi
 
         # is the slave ok to have a VIP on it
@@ -748,6 +745,10 @@ mysql_monitor() {
         status_loglevel="info"
     fi
 
+    if ocf_is_ms; then
+        OCF_CHECK_LEVEL=10
+    fi
+
     mysql_common_status $status_loglevel
     rc=$?
 
@@ -762,13 +763,19 @@ mysql_monitor() {
             #   nodename.com pengine: debug: master_color: mysql:0 master score: -1
             # If there are NO nodes with positive vaule election of mysql master will fail with
             #   nodename.com pengine: info: master_color: ms_mysql: Promoted 0 instances of a possible 1 to master
-            $CRM_MASTER -D
+            ocf_promotion_score -D
         fi
 
         return $rc
     fi
 
-    if [ $OCF_CHECK_LEVEL -gt 0 -a -n "$OCF_RESKEY_test_table" ]; then
+    if [ $OCF_CHECK_LEVEL -eq 10 ]; then
+        if [ -z "$OCF_RESKEY_test_table" ]; then
+            ocf_exit_reason "test_table not set"
+            return $OCF_ERR_CONFIGURED
+
+        fi
+
         # Check if this instance is configured as a slave, and if so
         # check slave status
         if is_slave; then
@@ -782,22 +789,20 @@ mysql_monitor() {
 
         if [ $rc -ne 0 ]; then
             # We are master/slave and test failed. Delete master score for this node as it is considered unhealthy because of this particular failed check.
-            ocf_is_ms && $CRM_MASTER -D
+            ocf_is_ms && ocf_promotion_score -D
             ocf_exit_reason "Failed to select from $test_table";
             return $OCF_ERR_GENERIC;
         fi
-    else
-        # In case no exnteded tests are enabled and we are in master/slave mode _always_ set the master score to 1 if we reached this point
-        ocf_is_ms && $CRM_MASTER -v 1
     fi
 
     if ocf_is_ms && ! get_read_only; then
         ocf_log debug "MySQL monitor succeeded (master)";
         # Always set master score for the master
-        $CRM_MASTER -v 2
+        ocf_promotion_score -v $((${OCF_RESKEY_max_slave_lag}+1))
         return $OCF_RUNNING_MASTER
     else
         ocf_log debug "MySQL monitor succeeded";
+        ocf_is_ms && ocf_promotion_score -v 1
         return $OCF_SUCCESS
     fi
 }
@@ -863,8 +868,7 @@ mysql_start() {
         # won't ever promote us in the absence of any explicit
         # preference set by the administrator. We choose a low
         # greater-than-zero preference.
-        $CRM_MASTER -v 1
-
+        ocf_promotion_score -v 1
     fi
 
     # Initial monitor action
@@ -885,7 +889,7 @@ mysql_start() {
 mysql_stop() {
     if ocf_is_ms; then
         # clear preference for becoming master
-        $CRM_MASTER -D
+        ocf_promotion_score -D
 
         # Remove VIP capability
         set_reader_attr 0
@@ -914,7 +918,7 @@ mysql_promote() {
     # Existing master gets a higher-than-default master preference, so
     # the cluster manager does not shuffle the master role around
     # unnecessarily
-    $CRM_MASTER -v $((${OCF_RESKEY_max_slave_lag}+1))
+    ocf_promotion_score -v $((${OCF_RESKEY_max_slave_lag}+1))
 
     # A master can accept reads
     set_reader_attr 1
@@ -929,7 +933,7 @@ mysql_demote() {
 
     # Return master preference to default, so the cluster manager gets
     # a chance to select a new master
-    $CRM_MASTER -v 1
+    ocf_promotion_score -v 1
 }
 
 mysql_notify() {

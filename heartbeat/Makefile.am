@@ -32,22 +32,22 @@ ocfdir		        = $(OCF_RA_DIR_PREFIX)/heartbeat
 dtddir			= $(datadir)/$(PACKAGE_NAME)
 dtd_DATA		= ra-api-1.dtd metadata.rng
 
+ocf_PROGRAMS		=
+
 if USE_IPV6ADDR_AGENT
-ocf_PROGRAMS           = IPv6addr
-else
-ocf_PROGRAMS           =
+ocf_PROGRAMS		+= IPv6addr
 endif
 
+halib_PROGRAMS		=
+
 if IPV6ADDR_COMPATIBLE
-halib_PROGRAMS         = send_ua
-else
-halib_PROGRAMS         =
+halib_PROGRAMS		+= send_ua
 endif
 
 IPv6addr_SOURCES        = IPv6addr.c IPv6addr_utils.c
-send_ua_SOURCES         = send_ua.c IPv6addr_utils.c
-
 IPv6addr_LDADD          = -lplumb $(LIBNETLIBS)
+
+send_ua_SOURCES         = send_ua.c IPv6addr_utils.c
 send_ua_LDADD           = $(LIBNETLIBS)
 
 ocf_SCRIPTS	      = AoEtarget		\
@@ -101,6 +101,7 @@ ocf_SCRIPTS	      = AoEtarget		\
 			azure-lb		\
 			clvm			\
 			conntrackd		\
+			corosync-qnetd		\
 			crypt			\
 			db2			\
 			dhcpd			\
@@ -115,11 +116,13 @@ ocf_SCRIPTS	      = AoEtarget		\
 			fio			\
 			galera			\
 			garbd			\
+			gcp-ilb			\
 			gcp-vpc-move-ip		\
 			iSCSILogicalUnit	\
 			iSCSITarget		\
 			ids			\
 			iface-bridge		\
+			iface-macvlan		\
 			iface-vlan		\
 			ipsec			\
 			iscsi			\
@@ -139,12 +142,18 @@ ocf_SCRIPTS	      = AoEtarget		\
 			nfsnotify		\
 			nfsserver		\
 			nginx			\
+			nvmet-subsystem		\
+			nvmet-namespace		\
+			nvmet-port		\
+			ocivip \
 			openstack-cinder-volume \
 			openstack-floating-ip   \
 			openstack-info          \
+			openstack-virtual-ip    \
 			oraasm			\
 			oracle			\
 			oralsnr			\
+			osceip			\
 			ovsmonitor		\
 			pgagent			\
 			pgsql			\
@@ -155,6 +164,7 @@ ocf_SCRIPTS	      = AoEtarget		\
 			pound			\
 			proftpd			\
 			rabbitmq-cluster	\
+			rabbitmq-server-ha	\
 			redis			\
 			rkt			\
 			rsyncd			\
@@ -164,6 +174,8 @@ ocf_SCRIPTS	      = AoEtarget		\
 			sg_persist              \
 			mpathpersist		\
 			slapd			\
+			smb-share		\
+			storage-mon		\
 			sybaseASE		\
 			symlink			\
 			syslog-ng		\
@@ -178,6 +190,10 @@ if BUILD_AZURE_EVENTS
 ocf_SCRIPTS	     += azure-events
 endif
 
+if BUILD_AZURE_EVENTS_AZ
+ocf_SCRIPTS	     += azure-events-az
+endif
+
 if BUILD_GCP_PD_MOVE
 ocf_SCRIPTS	     += gcp-pd-move
 endif
@@ -188,6 +204,10 @@ endif
 
 if BUILD_GCP_VPC_MOVE_VIP
 ocf_SCRIPTS	     += gcp-vpc-move-vip
+endif
+
+if BUILD_POWERVS_SUBNET
+ocf_SCRIPTS	     += powervs-subnet
 endif
 
 ocfcommondir		= $(OCF_LIB_DIR_PREFIX)/heartbeat
@@ -204,6 +224,7 @@ ocfcommon_DATA		= ocf-shellfuncs 	\
 			  lvm-clvm.sh		\
 			  lvm-plain.sh		\
 			  lvm-tag.sh		\
+			  openstack-common.sh	\
 			  ora-common.sh		\
 			  mysql-common.sh	\
 			  nfsserver-redhat.sh	\
@@ -228,3 +249,6 @@ do_spellcheck = printf '[%s]\n' "$(agent)"; \
                 | sed -n 's|^&\([^:]*\):.*|\1|p';
 spellcheck:
 	@$(foreach agent,$(ocf_SCRIPTS), $(do_spellcheck))
+
+clean-local:
+	rm -rf __pycache__ *.pyc

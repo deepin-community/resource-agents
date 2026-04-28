@@ -14,33 +14,38 @@ Build-Depends: autoconf,
                docbook-xsl,
                gawk,
                libglib2.0-dev,
-               liblrm2-dev (>= 1.0.12~),
+               liblrm2-dev,
                libnet1-dev,
-               libpils2-dev (>= 1.0.12~),
-               libplumb2-dev (>= 1.0.12~),
-               libplumbgpl2-dev (>= 1.0.12~),
-               libstonith1-dev (>= 1.0.12~),
+               libpils2-dev,
+               libplumb2-dev,
+               libplumbgpl2-dev,
+               libqb-dev,
+               libstonith1-dev,
                libtool,
                libxml2-utils,
                net-tools,
-               pkg-config,
+               pkgconf,
                python3,
+               python3-googleapi,
+               python3-pyroute2,
+               python3-requests,
+               python3-urllib3,
+               shellcheck,
 #              for systemd.pc:
-               systemd [linux-any],
+               systemd-dev,
                xsltproc,
                xml-twig-tools,
 Rules-Requires-Root: no
-Standards-Version: 4.5.1
+Standards-Version: 4.7.2
 Homepage: https://github.com/ClusterLabs/resource-agents
 Vcs-Browser: https://salsa.debian.org/ha-team/resource-agents
 Vcs-Git: https://salsa.debian.org/ha-team/resource-agents.git
 
 Package: resource-agents
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}, ${python3:Depends}, cluster-glue, gawk
+Depends: ${misc:Depends}, ${shlibs:Depends}, ${python3:Depends},
+ bc, cluster-glue, gawk, psmisc
 Recommends: libxml2-utils, net-tools, python3-googleapi
-Replaces: cluster-agents (<= 1:1.0.4-1), rgmanager (<= 3.0.12-2+b1), resource-agents-dev (<< 1:3.9.6)
-Conflicts: cluster-agents (<= 1:1.0.4-1), rgmanager (<= 3.0.12-2+b1), resource-agents-dev (<< 1:3.9.6)
 Provides: resource-agents-dev
 Description: Cluster Resource Agents
  This package contains cluster resource agents (RAs) compliant with the Open
@@ -53,7 +58,6 @@ Description: Cluster Resource Agents
 Package: ldirectord
 Architecture: all
 Depends: ipvsadm,
-         lsb-base,
          libauthen-radius-perl,
          libcrypt-ssleay-perl,
          libdbi-perl,
@@ -72,10 +76,6 @@ Depends: ipvsadm,
          ${misc:Depends},
          ${perl:Depends}
 Pre-Depends: ${misc:Pre-Depends}
-Recommends: logrotate, rsyslog | system-log-daemon
-Conflicts: libpils0 (<< 2.0.8-3),
-           libstonith0 (<< 2.0.8-3),
-           stonith (<< 2.0.8-3)
 Description: Monitors virtual services provided by LVS
  ldirectord is a stand-alone daemon to monitor real servers behind
  virtual services provided by The Linux Virtual Server (LVS).

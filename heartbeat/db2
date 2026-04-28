@@ -3,7 +3,7 @@
 # db2
 #
 # Resource agent that manages a DB2 LUW database in Standard role 
-# or HADR configuration in master/slave configuration.
+# or HADR configuration in promotable configuration.
 # Multi partition is supported as well.
 #
 # Copyright (c) 2011 Holger Teutsch <holger.teutsch@web.de>
@@ -58,10 +58,10 @@ db2_meta_data() {
 cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="db2">
+<resource-agent name="db2" version="1.0">
 <version>1.0</version>
 <longdesc lang="en">
-Resource Agent that manages an IBM DB2 LUW databases in Standard role as primitive or in HADR roles in master/slave configuration. Multiple partitions are supported.
+Resource Agent that manages an IBM DB2 LUW databases in Standard role as primitive or in HADR roles in promotable configuration. Multiple partitions are supported.
 
 Standard mode:
 
@@ -71,8 +71,8 @@ Configure each partition as a separate primitive resource.
 HADR mode:
 
 A single database in HADR configuration is made highly available by automating takeover operations.
-Configure a master / slave resource with notifications enabled and an
-additional monitoring operation with role "Master".
+Configure a promotable resource with notifications enabled and an
+additional monitoring operation with role "Promoted".
 
 In case of HADR be very deliberate in specifying intervals/timeouts. The detection of a failure including promote must complete within HADR_PEER_WINDOW.
 
@@ -84,7 +84,7 @@ In addition to honoring requirements for crash recovery etc. for your specific d
 
 For further information and examples consult http://www.linux-ha.org/wiki/db2_(resource_agent)
 </longdesc>
-<shortdesc lang="en">Resource Agent that manages an IBM DB2 LUW databases in Standard role as primitive or in HADR roles as master/slave configuration. Multiple partitions are supported.</shortdesc>
+<shortdesc lang="en">Resource Agent that manages an IBM DB2 LUW databases in Standard role as primitive or in HADR roles as promotable configuration. Multiple partitions are supported.</shortdesc>
 
 <parameters>
 <parameter name="instance" unique="1" required="1">
@@ -125,7 +125,7 @@ The number of the partition (DBPARTITIONNUM) to be managed.
 <action name="demote" timeout="120s"/>
 <action name="notify" timeout="10s"/>
 <action name="monitor" depth="0" timeout="60s" interval="20s"/>
-<action name="monitor" depth="0" timeout="60s" role="Master" interval="22s"/>
+<action name="monitor" depth="0" timeout="60s" role="Promoted" interval="22s"/>
 <action name="validate-all" timeout="5s"/>
 <action name="meta-data" timeout="5s"/>
 </actions>
@@ -267,14 +267,14 @@ db2_fal_attrib() {
 
     case "$2" in
         set)
-        me=$(uname -n)
+        me=$(ocf_local_nodename)
 
         # loop over all member nodes and set attribute
         crm_node -l |
         while read id node member
         do
             [ "$member" = member -a "$node" != "$me" ] || continue
-            crm_attribute -t nodes -l reboot --node=$node -n $attr -v "$3"
+            crm_attribute -l forever --node=$node -n $attr -v "$3"
             rc=$?
             ocf_log info "DB2 instance $instance($db2node/$db: setting attrib for FAL to $FIRST_ACTIVE_LOG @ $node"
             [ $rc != 0 ] && break
@@ -282,9 +282,9 @@ db2_fal_attrib() {
         ;;
 
         get)
-        crm_attribute -t nodes -l reboot -n $attr -G --quiet 2>&1
+        crm_attribute -l forever -n $attr -G --quiet 2>&1
         rc=$?
-        if [ $rc != 0 ]
+        if ! ocf_is_true "$OCF_RESKEY_CRM_meta_notify" && [ $rc != 0 ]
         then
             ocf_log warn "DB2 instance $instance($db2node/$db: can't retrieve attribute $attr, are you sure notifications are enabled ?"
         fi
@@ -326,9 +326,11 @@ db2_get_cfg() {
             /First active log file/ {printf "FIRST_ACTIVE_LOG='%s'\n", $NF;}
             /HADR_PEER_WINDOW/ {printf "HADR_PEER_WINDOW='%s'\n", $NF;}')
 
-
     # sets HADR_ROLE HADR_TIMEOUT HADR_PEER_WINDOW 
-    eval $hadr_vars
+    HADR_ROLE=$(echo "$output" | awk '/HADR database role/ {print $NF;}')
+    HADR_TIMEOUT=$(echo "$output" | awk '/HADR_TIMEOUT/ {print $NF;}')
+    FIRST_ACTIVE_LOG=$(echo "$output" | awk '/First active log file/ {print $NF;}')
+    HADR_PEER_WINDOW=$(echo "$output" | awk '/HADR_PEER_WINDOW/ {print $NF;}')
 
     # HADR_PEER_WINDOW comes with V9 and is checked later
     if [ -z "$HADR_ROLE" -o -z "$HADR_TIMEOUT" ]
@@ -407,7 +409,7 @@ db2_start() {
     # partition is explicitly specified, activate without
     # partition information. This allows db2 instances without
     # partition support to be managed. 
-    if [ -z "$OCF_RESKEY_dbpartitionnum" ] && ! [ -a "$db2sql/db2nodes.cfg" ]; then
+    if [ -z "$OCF_RESKEY_dbpartitionnum" ] && ! [ -e "$db2sql/db2nodes.cfg" ]; then
         start_opts=""
     fi
 
@@ -511,7 +513,7 @@ db2_stop_bg() {
 
     rc=$OCF_SUCCESS
 
-    if [ -z "$OCF_RESKEY_dbpartitionnum" ] && ! [ -a "$db2sql/db2nodes.cfg" ]; then
+    if [ -z "$OCF_RESKEY_dbpartitionnum" ] && ! [ -e "$db2sql/db2nodes.cfg" ]; then
         stop_opts=""
     fi
 
@@ -767,7 +769,7 @@ db2_promote() {
             return $OCF_SUCCESS
             ;;
 
-            PRIMARY/PEER/*|PRIMARY/REMOTE_CATCHUP/*|Primary/Peer)
+            PRIMARY/PEER/*|PRIMARY/REMOTE_CATCHUP/*|PRIMARY/REMOTE_CATCHUP_PENDING/CONNECTED|Primary/Peer)
             # nothing to do, only update pacemaker's view
             echo MASTER > $STATE_FILE
             return $OCF_SUCCESS
@@ -846,7 +848,7 @@ db2_notify() {
 
     # only interested in pre-start
     [  $OCF_RESKEY_CRM_meta_notify_type = pre \
-    -a $OCF_RESKEY_CRM_meta_notify_operation = start ] || return $OCF_SUCESS
+    -a $OCF_RESKEY_CRM_meta_notify_operation = start ] || return $OCF_SUCCESS
 
     # gets FIRST_ACTIVE_LOG
     db2_get_cfg $dblist || return $?

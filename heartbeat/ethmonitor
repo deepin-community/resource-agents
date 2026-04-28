@@ -79,8 +79,8 @@ meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="ethmonitor">
-<version>1.2</version>
+<resource-agent name="ethmonitor" version="1.2">
+<version>1.0</version>
 
 <longdesc lang="en">
 Monitor the vitality of a local network interface.
@@ -271,6 +271,9 @@ if_init() {
 			validate-all)
 				ocf_exit_reason "Interface $NIC does not exist"
 				exit $OCF_ERR_CONFIGURED;;
+			monitor)
+				ocf_log debug "Interface $NIC does not exist"
+				;;
 			*)	
 				## It might be a bond interface which is temporarily not available, therefore we want to continue here
 				ocf_log warn "Interface $NIC does not exist"
@@ -464,7 +467,7 @@ END
 
 set_cib_value() {
 	local score=`expr $1 \* $OCF_RESKEY_multiplier`
-	attrd_updater -n $ATTRNAME -v $score -q
+	attrd_updater -n $ATTRNAME -v $score
 	local rc=$?
 	case $rc in
 		0) ocf_log debug "attrd_updater: Updated $ATTRNAME = $score" ;;
@@ -545,6 +548,7 @@ if_start()
 if_validate() {
 	check_binary $IP2UTIL
 	check_binary arping
+	check_binary bc
 	if_init
 }
 

@@ -1,11 +1,10 @@
 #!/usr/bin/dh-exec
-
 etc/ha.d/shellfuncs
+${deb_systemdsystemunitdir}/resource-agents-deps.target [linux-any]
 usr/include
-usr/lib/heartbeat
 usr/lib/ocf
 usr/lib/tmpfiles.d/resource-agents.conf [linux-any]
-lib/systemd/system/resource-agents-deps.target [linux-any]
+usr/libexec/heartbeat
 usr/sbin/ocft
 usr/sbin/ocf-tester
 usr/sbin/sfex_init [linux-any]
